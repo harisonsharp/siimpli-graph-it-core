@@ -1,0 +1,25 @@
+{
+    "name": "@siimpli/graph-it-core",
+    "version": "0.3.62",
+    "description": "Core logic and components for SiimpliGraphIt",
+    "main": "src/index.js",
+    "scripts": {
+        "test": "echo \"Error: no test specified\" && exit 1"
+    },
+    "keywords": [
+        "graph-it",
+        "visualization",
+        "graph"
+    ],
+    "author": "Siimpl",
+    "license": "ISC",
+    "dependencies": {
+        "d3": "^7.9.0",
+        "react": "^18.3.1",
+        "react-dom": "^18.3.1",
+        "prop-types": "^15.8.1",
+        "@tauri-apps/plugin-fs": "^2.0.0",
+        "@tauri-apps/plugin-dialog": "^2.0.0",
+        "@tauri-apps/plugin-shell": "^2.0.0"
+    }
+}

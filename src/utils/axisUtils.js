@@ -1,0 +1,462 @@
+/**
+ * @fileoverview Axis rendering and calculation utilities for D3 visualizations.
+ * Handles axis positioning, intercept calculations, and axis label rendering.
+ *
+ * @author Harison Sharp
+ * @since 0.3.0
+ *
+ * @module Axis Utilities
+ * @type {Utility Library}
+ *
+ * @requires d3 - Data visualization library for axis rendering
+ *
+ * @function calculateAxisIntercepts - Calculate axis intercept positions
+ * @function drawAxes - Render graph axes with labels
+ *
+ * @exports calculateAxisIntercepts, drawAxes
+ *
+ * @example
+ * const intercepts = calculateAxisIntercepts([0, 100], [0, 50], config);
+ * drawAxes(g, xScale, yScale, intercepts, labels, dimensions);
+ *
+ * @relatedFiles graphUtils.js (original)
+ */
+
+import * as d3 from 'd3';
+
+/**
+ * Calculate axis intercept positions based on configuration
+ * @param {Array<number>} xExtent - [min, max] for x-axis
+ * @param {Array<number>} yExtent - [min, max] for y-axis
+ * @param {Object} config - Graph configuration
+ * @param {Object} globalSettings - Global settings (fallback)
+ * @returns {Object} {x, y} intercept coordinates
+ *
+ * @example
+ * calculateAxisIntercepts([0, 100], [-10, 50], {axisIntercept: 'origin'})
+ * // Returns: {x: 0, y: 0}
+ */
+export const calculateAxisIntercepts = (xExtent, yExtent, config = {}, globalSettings = {}) => {
+    const interceptType = config.axisIntercept || globalSettings.axisIntercept || 'origin';
+
+    switch (interceptType) {
+        case 'minimum':
+            return { x: xExtent[0], y: yExtent[0] };
+
+        case 'origin':
+            return { x: 0, y: 0 };
+
+        case 'custom':
+            const customIntercept = config.customIntercept || globalSettings.customIntercept || { x: 0, y: 0 };
+            return {
+                x: Number.parseFloat(customIntercept.x) || 0,
+                y: Number.parseFloat(customIntercept.y) || 0,
+                y2: Number.parseFloat(customIntercept.y2) || 0
+            };
+
+        default:
+            return { x: 0, y: 0 };
+    }
+};
+
+/**
+ * Draw graph axes with labels and proper positioning
+ * @param {d3.Selection} g - D3 selection of graph group element
+ * @param {d3.Scale} xScale - X-axis scale
+ * @param {d3.Scale|Object} yScale - Y-axis scale (or {primary, secondary} object for dual-axis)
+ * @param {number} height - Graph height
+ * @param {number} width - Graph width
+ * @param {Object} margin - Margin object {top, right, bottom, left}
+ * @param {string} xAxisLabel - Label for x-axis
+ * @param {string|Object} yAxisLabel - Label for y-axis (or {primary, secondary} object for dual-axis)
+ * @param {string} graphType - Type of graph (for special handling)
+ * @param {Object} config - Graph configuration for axis positioning
+ * @param {Object} axisColors - Optional colors for axes {primary, secondary}
+ * @param {Object} seriesInfo - Optional series information for determining colors
+ * @param {Function} seriesColorScale - Optional color scale for single-series coloring
+ * @param {Object} globalSettings - Global settings including showGuideLines
+ *
+ * @example
+ * drawAxes(g, xScale, yScale, 400, 600, margins, 'Time', 'Temperature', 'scatter', config)
+ */
+import { generateCustomBins } from './histogram.js';
+
+/**
+ * Format number with scientific notation if it exceeds digit threshold
+ * @param {number} value - Value to format
+ * @param {number} thresholdDigits - Number of digits before switching to scientific notation
+ * @returns {string} Formatted string
+ */
+const formatNumber = (value, thresholdDigits) => {
+    if (value === 0) return "0";
+    if (value === undefined || value === null || isNaN(value)) return "";
+
+    const absVal = Math.abs(value);
+    // Check if number of digits (integer part) exceeds threshold
+    const intPart = Math.floor(absVal).toString();
+
+    // Also check for very small numbers (e.g. 0.00001) which take up space
+    // But user specifically mentioned "long numbers" > 6 digits.
+    if (intPart.length > thresholdDigits) {
+        // Use 3 significant figures (e.g. 1.42e+5)
+        return d3.format(".2e")(value);
+    }
+    return value;
+};
+
+const drawXAxis = (g, xScale, xAxisY, xAxisLabelOffset, xAxisLabel, graphType, data, xAxisInfo) => {
+    // Create axis generator
+    const axisGenerator = d3.axisBottom(xScale);
+
+    // Histogram specific handling - Range Labels
+    if (graphType === 'histogram' && data && xAxisInfo) {
+        // Extract values to generate bins matching the renderer
+        const values = data
+            .map(d => +d[xAxisInfo.columnName])
+            .filter(v => !isNaN(v) && isFinite(v));
+
+        if (values.length > 0) {
+            const bins = generateCustomBins(values);
+            const normalBins = bins.filter(b => !b.isOutlierBin);
+
+            // Use bin midpoints for ticks
+            // We need to be careful not to clutter.
+            // If too many bins, maybe skip some?
+            // For now, let's try to show all normal bins if they fit.
+            const tickValues = normalBins.map(b => (b.min + b.max) / 2);
+
+            axisGenerator.tickValues(tickValues)
+                .tickFormat((d, i) => {
+                    // Find the bin corresponding to this tick (midpoint)
+                    // Since we generated tickValues from normalBins, they should match index i
+                    // provided d3 doesn't skip ticks.
+                    // To be safe, find bin containing d.
+                    const bin = normalBins.find(b => d >= b.min && d <= b.max);
+                    if (bin) {
+                        // Format range
+                        return `${Number(bin.min.toFixed(1))}-${Number(bin.max.toFixed(1))}`;
+                    }
+                    return d;
+                });
+        }
+    } else if (!xScale.bandwidth) {
+        // Numeric X-Axis (Scatter, Line, etc.)
+        axisGenerator.tickFormat(d => formatNumber(d, 6));
+    }
+
+    // Intelligent tick skipping for band scales (categorical/discrete)
+    // if (xScale.bandwidth) {
+    //     const domain = xScale.domain();
+    //     const width = xScale.range()[1] - xScale.range()[0];
+    //     const labelWidth = 40; // Approx width of a year label "2025"
+    //     const maxLabels = Math.floor(width / (labelWidth + 10)); // +10 padding
+
+    //     if (domain.length > maxLabels) {
+    //         const step = Math.ceil(domain.length / maxLabels);
+    //         const tickValues = domain.filter((d, i) => i % step === 0);
+    //         axisGenerator.tickValues(tickValues);
+    //     }
+    // }
+
+    const xAxis = g.append('g')
+        .attr('class', 'x-axis')
+        .attr('transform', `translate(0,${xAxisY})`)
+        .call(axisGenerator);
+
+    xAxis.selectAll('text')
+        .style('font-family', 'sans-serif')
+        .style('font-size', '12px');
+
+    // Rotation Logic
+    // User request: "Bar charts with x-axis ticks texts that are nominal, corresponding with a date, or other non-numeric value should be rotated 45 degrees"
+    // We apply this to all band scales (nominal/categorical) and potentially time scales if we had them explicitly (but usually handled by d3.scaleTime).
+    // Here we focus on band scales or if explicit rotation is needed.
+    if (xScale.bandwidth) {
+        // Rotate 45 degrees (actually -45 to read upwards-right)
+        xAxis.selectAll('text')
+            .style('text-anchor', 'end')
+            .attr('dx', '-.8em')
+            .attr('dy', '.15em')
+            .attr('transform', 'rotate(-45)');
+    } else if (graphType === 'histogram') {
+        // Histogram ranges can be long, so rotate them too
+        xAxis.selectAll('text')
+            .style('text-anchor', 'end')
+            .attr('dx', '-.8em')
+            .attr('dy', '.15em')
+            .attr('transform', 'rotate(-45)');
+    }
+
+    return xAxis;
+};
+
+const drawPrimaryYAxis = (g, primaryYScale, yAxisX, primaryColor) => {
+    const axisGenerator = d3.axisLeft(primaryYScale)
+        .tickFormat(d => formatNumber(d, 8)); // 8 digits threshold for Y-axis
+
+    const primaryYAxis = g.append('g')
+        .attr('class', 'y-axis y-axis-primary')
+        .attr('transform', `translate(${yAxisX},0)`)
+        .call(axisGenerator);
+
+    primaryYAxis.selectAll('text')
+        .style('font-family', 'sans-serif')
+        .style('font-size', '12px')
+        .style('fill', primaryColor);
+
+    primaryYAxis.selectAll('line')
+        .style('stroke', primaryColor);
+
+    primaryYAxis.select('.domain')
+        .style('stroke', primaryColor);
+
+    return primaryYAxis;
+};
+
+const drawSecondaryYAxis = (g, secondaryYScale, width, secondaryColor) => {
+    const axisGenerator = d3.axisRight(secondaryYScale)
+        .tickFormat(d => formatNumber(d, 8)); // 8 digits threshold for Y-axis
+
+    const secondaryYAxis = g.append('g')
+        .attr('class', 'y-axis y-axis-secondary')
+        .attr('transform', `translate(${width},0)`)
+        .call(axisGenerator);
+
+    secondaryYAxis.selectAll('text')
+        .style('font-family', 'sans-serif')
+        .style('font-size', '12px')
+        .style('fill', secondaryColor);
+
+    secondaryYAxis.selectAll('line')
+        .style('stroke', secondaryColor);
+
+    secondaryYAxis.select('.domain')
+        .style('stroke', secondaryColor);
+
+    return secondaryYAxis;
+};
+
+const drawLabels = (g, height, width, margin, primaryLabel, secondaryLabel, xAxisLabel, xAxisY, xAxisLabelOffset, primaryColor, secondaryColor) => {
+    // Primary Y axis label
+    g.append('text')
+        .attr('class', 'y-axis-label y-axis-label-primary')
+        .attr('transform', 'rotate(-90)')
+        .attr('y', 0 - margin.left + 15)
+        .attr('x', 0 - (height / 2))
+        .attr('dy', '1em')
+        .style('text-anchor', 'middle')
+        .style('font-family', 'sans-serif')
+        .style('font-size', '14px')
+        .style('font-weight', 'bold')
+        .style('fill', primaryColor)
+        .text(primaryLabel);
+
+    // Secondary Y axis label
+    if (secondaryLabel) {
+        g.append('text')
+            .attr('class', 'y-axis-label y-axis-label-secondary')
+            .attr('transform', 'rotate(-90)')
+            .attr('y', width + 65)
+            .attr('x', 0 - (height / 2))
+            .attr('dy', '1em')
+            .style('text-anchor', 'middle')
+            .style('font-family', 'sans-serif')
+            .style('font-size', '14px')
+            .style('font-weight', 'bold')
+            .style('fill', secondaryColor)
+            .text(secondaryLabel);
+    }
+
+    // X axis label
+    g.append('text')
+        .attr('class', 'x-axis-label')
+        .attr('y', xAxisY + xAxisLabelOffset + 10) // Add a bit more padding for rotated labels
+        .attr('x', width / 2)
+        .style('text-anchor', 'middle')
+        .style('font-family', 'sans-serif')
+        .style('font-size', '14px')
+        .style('font-weight', 'bold')
+        .text(xAxisLabel);
+};
+
+export const drawAxes = (
+    g,
+    xScale,
+    yScale,
+    height,
+    width,
+    margin,
+    xAxisLabel,
+    yAxisLabel,
+    graphType,
+    config = {},
+    axisColors = null,
+    seriesInfo = null,
+    seriesColorScale = null,
+    globalSettings = {},
+    data = null, // Added data param
+    xAxisInfo = null // Added xAxisInfo param
+) => {
+    // Check if dual-axis mode (yScale is an object with primary/secondary)
+    const isDualAxis = yScale && typeof yScale === 'object' && yScale.primary && yScale.secondary;
+    const primaryYScale = isDualAxis ? yScale.primary : yScale;
+    const secondaryYScale = isDualAxis ? yScale.secondary : null;
+
+    // Check if labels are also dual
+    const isDualLabel = yAxisLabel && typeof yAxisLabel === 'object' && yAxisLabel.primary;
+    const primaryLabel = isDualLabel ? yAxisLabel.primary : yAxisLabel;
+    const secondaryLabel = isDualLabel ? yAxisLabel.secondary : null;
+
+    // Override y-axis label for histogram
+    let finalPrimaryLabel = primaryLabel;
+    if (graphType === 'histogram') {
+        finalPrimaryLabel = 'Frequency';
+    }
+
+    // Calculate axis positioning
+    const xAxisPosition = height;
+    const yAxisPosition = 0;
+
+    // Handle axis intercepts if configured
+    let xAxisY = xAxisPosition;
+    let yAxisX = yAxisPosition;
+
+    if (config.axisIntercept === 'origin') {
+        const xDomain = xScale.domain();
+        const yDomain = primaryYScale.domain();
+
+        if (xDomain[0] <= 0 && xDomain[1] >= 0) {
+            yAxisX = Math.max(0, Math.min(width, xScale(0)));
+        }
+        if (yDomain[0] <= 0 && yDomain[1] >= 0) {
+            xAxisY = Math.max(0, Math.min(height, primaryYScale(0)));
+        }
+    } else if (config.axisIntercept === 'custom' && config.customIntercept) {
+        const customX = Number.parseFloat(config.customIntercept.x) || 0;
+        const customY = Number.parseFloat(config.customIntercept.y) || 0;
+
+        const xDomain = xScale.domain();
+        const yDomain = primaryYScale.domain();
+
+        if (customX >= xDomain[0] && customX <= xDomain[1]) {
+            yAxisX = xScale(customX);
+        }
+        if (customY >= yDomain[0] && customY <= yDomain[1]) {
+            xAxisY = primaryYScale(customY);
+        }
+    }
+
+    // Ensure axes are within bounds
+    xAxisY = Math.max(0, Math.min(height, xAxisY));
+    yAxisX = Math.max(0, Math.min(width, yAxisX));
+
+    // Determine axis colors
+    const primaryColor = axisColors?.primary || '#333';
+    const secondaryColor = axisColors?.secondary || '#333';
+
+    drawXAxis(g, xScale, xAxisY, 50, xAxisLabel, graphType, data, xAxisInfo);
+    drawPrimaryYAxis(g, primaryYScale, yAxisX, primaryColor);
+
+    if (isDualAxis && secondaryYScale) {
+        drawSecondaryYAxis(g, secondaryYScale, width, secondaryColor);
+    }
+
+    drawLabels(g, height, width, margin, finalPrimaryLabel, secondaryLabel, xAxisLabel, xAxisY, 50, primaryColor, secondaryColor);
+
+    // Draw guide lines if enabled
+    if (globalSettings.showGuideLines) {
+        drawGuideLines(g, xScale, primaryYScale, width, height);
+    }
+
+    return { xAxisY, xAxisLabelOffset: 50 };
+};
+
+/**
+ * Calculate axis position in pixels based on scale and intercept
+ * @param {d3.Scale} scale - D3 scale
+ * @param {number} intercept - Intercept value in data coordinates
+ * @returns {number} Position in pixels
+ */
+export const calculateAxisPosition = (scale, intercept) => {
+    return scale(intercept);
+};
+
+/**
+ * Validate axis configuration
+ * @param {Object} axisConfig - Axis configuration
+ * @returns {boolean} True if valid
+ * @throws {Error} If configuration is invalid
+ */
+export const validateAxisConfig = (axisConfig) => {
+    if (!axisConfig) {
+        throw new Error('Axis configuration is required');
+    }
+
+    if (!axisConfig.columnName || typeof axisConfig.columnName !== 'string') {
+        throw new Error('Axis configuration must have a valid columnName');
+    }
+
+    return true;
+};
+
+/**
+ * Draw faint guide lines (grid) on the graph
+ * @param {d3.Selection} g - D3 selection of graph group element
+ * @param {d3.Scale} xScale - X-axis scale
+ * @param {d3.Scale} yScale - Y-axis scale
+ * @param {number} width - Graph width
+ * @param {number} height - Graph height
+ */
+export const drawGuideLines = (g, xScale, yScale, width, height) => {
+    // Create a group for guide lines (behind data)
+    const guideGroup = g.insert('g', ':first-child')
+        .attr('class', 'guide-lines')
+        .style('opacity', 0.15);
+
+    // Horizontal guide lines (based on Y-axis ticks)
+    const yTicks = yScale.ticks ? yScale.ticks() : yScale.domain();
+    yTicks.forEach(tick => {
+        guideGroup.append('line')
+            .attr('x1', 0)
+            .attr('x2', width)
+            .attr('y1', yScale(tick))
+            .attr('y2', yScale(tick))
+            .style('stroke', '#999')
+            .style('stroke-width', 1)
+            .style('stroke-dasharray', '2,3');
+    });
+
+    // Vertical guide lines (based on X-axis ticks)
+    // Handle both linear and band scales
+    if (xScale.ticks) {
+        // Linear scale
+        const xTicks = xScale.ticks();
+        xTicks.forEach(tick => {
+            guideGroup.append('line')
+                .attr('x1', xScale(tick))
+                .attr('x2', xScale(tick))
+                .attr('y1', 0)
+                .attr('y2', height)
+                .style('stroke', '#999')
+                .style('stroke-width', 1)
+                .style('stroke-dasharray', '2,3');
+        });
+    } else if (xScale.domain) {
+        // Band scale or other categorical scale
+        const xValues = xScale.domain();
+        // Only draw guide lines for reasonable number of categories
+        if (xValues.length <= 50) {
+            xValues.forEach(value => {
+                const xPos = xScale(value) + (xScale.bandwidth ? xScale.bandwidth() / 2 : 0);
+                guideGroup.append('line')
+                    .attr('x1', xPos)
+                    .attr('x2', xPos)
+                    .attr('y1', 0)
+                    .attr('y2', height)
+                    .style('stroke', '#999')
+                    .style('stroke-width', 1)
+                    .style('stroke-dasharray', '2,3');
+            });
+        }
+    }
+};
