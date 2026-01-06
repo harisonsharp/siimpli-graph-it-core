@@ -33,7 +33,7 @@ export class LineChartRenderer extends BaseChartRenderer {
      */
     constructor(options = {}) {
         super();
-        this.strokeWidth = options.strokeWidth || 4;
+        this.strokeWidth = options.strokeWidth || 2;
         this.smooth = options.smooth || false;
         this.curveType = options.curveType || 'curveMonotoneX';
     }
@@ -68,7 +68,6 @@ export class LineChartRenderer extends BaseChartRenderer {
      */
     render(g, data, scales, xAxisInfo, yAxisInfo, config, colorScale = null, colorInfo = null, seriesColor = null, seriesConfig = {}) {
         this.validateRenderParams(g, data, scales);
-
         const { xScale, yScale } = scales;
         const validData = this.filterValidData(data, xAxisInfo, yAxisInfo);
 
@@ -124,7 +123,7 @@ export class LineChartRenderer extends BaseChartRenderer {
         else if (lineStyle === 'dotted') strokeDashArray = '2,4';
         else if (lineStyle === 'dash-dot') strokeDashArray = '10,5,2,5';
 
-        const finalColor = seriesColor || this.getDefaultColor();
+        const finalColor = seriesConfig.color || seriesColor || this.getDefaultColor();
 
         // Draw the line
         g.append('path')

@@ -53,6 +53,9 @@ export class BaseChartRenderer {
      */
     filterValidData(data, xAxisInfo, yAxisInfo) {
         return data.filter(d => {
+            if (yAxisInfo.fileName && d._sourceFile && d._sourceFile !== yAxisInfo.fileName) {
+                return false;
+            }
             const xValue = d[xAxisInfo.columnName];
             const yValue = d[yAxisInfo.columnName];
 
@@ -115,13 +118,19 @@ export class BaseChartRenderer {
      * @returns {string} Color value
      */
     getPointColor(dataPoint, colorScale, colorInfo, config, fallbackColor) {
-        if (config.colorGrading && colorScale && colorInfo) {
-            const value = dataPoint[colorInfo.columnName];
-            if (value !== undefined && value !== null) {
-                return colorScale(value);
-            }
+        const series = config.series.filter(s => s.yAxis.split('::')[1] === dataPoint._sourceFile && s.yAxis.split('::')[0] === Object.keys(dataPoint)[1]);
+        if (series.length === 0) {
+            return fallbackColor || this.getDefaultColor();
+        } else {
+            return series[0].color;
         }
-        return fallbackColor || this.getDefaultColor();
+        // if (config.colorGrading || colorScale || colorInfo) {
+        //     const value = dataPoint[colorInfo.columnName];
+        //     if (value !== undefined && value !== null) {
+        //         return colorScale(value);
+        //     }
+        // }
+        // return fallbackColor || this.getDefaultColor();
     }
 
     /**

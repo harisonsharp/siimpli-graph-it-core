@@ -146,13 +146,22 @@ export class GraphService {
             const yAxisInfo = series.yAxisInfo;
             // For non-bar charts, filter to only include rows with valid Y values for this specific series
             // For non-bar charts, filter to only include rows with valid Y values for this specific series
-            const seriesValidData = validData.filter(d => {
+            debugLog(`[GraphService] Series ${i} (${series.graphType}) data_points:`, {
+                yAxisInfo: yAxisInfo,
+                validData: validData,
+            });
+            const seriesValidData = validData.filter((d, index) => {
                 if (series.graphType === 'histogram') return true;
+                // Check for file name match if available to avoid column name collisions
+                if (yAxisInfo.fileName && d._sourceFile && d._sourceFile !== yAxisInfo.fileName) {
+                    return false;
+                }
                 const yValue = d[yAxisInfo.columnName];
+
                 return yValue !== undefined &&
                     yValue !== null &&
                     yValue !== '' &&
-                    !isNaN(+yValue);
+                    !isNaN(yValue);
             });
 
             debugLog(`[GraphService] Series ${i} (${series.graphType}):`, {

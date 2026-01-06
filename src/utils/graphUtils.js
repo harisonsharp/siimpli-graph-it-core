@@ -359,15 +359,17 @@ function exportWithOptimizedCanvas(svgBlob, canvasRef, width, height, WATERMARK_
                 let writeSuccess = false;
                 if (outputPath && (outputPath.includes('/') || outputPath.includes('\\'))) {
                     try {
-                        const { writeFile } = await import('@tauri-apps/plugin-fs');
+
                         await writeFile(outputPath, new Uint8Array(buffer));
                         writeSuccess = true;
                     } catch (writeError) {
-                        debugWarn('Tauri file write failed:', writeError.message);
+                        debugWarn('Tauri file write failed:', writeError);
                     }
                 }
 
-                resolve({ buffer, pngData: null, writeSuccess });
+                // Create a blob URL for potential browser download
+                const blobUrl = URL.createObjectURL(blob);
+                resolve({ buffer, pngData: blobUrl, writeSuccess });
             }, 'image/png');
         };
 

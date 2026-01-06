@@ -573,6 +573,9 @@ export const performCurveFitting = (csvData, config, curveFits) => {
 
         // Filter data for this series (X and Y must both be valid)
         const validData = validXData.filter(d => {
+            if (yAxisInfo.fileName && d._sourceFile && d._sourceFile !== yAxisInfo.fileName) {
+                return false;
+            }
             const hasYData = d && d[yAxisInfo.columnName] !== undefined && d[yAxisInfo.columnName] !== null;
             const yIsNumeric = hasYData && !isNaN(+d[yAxisInfo.columnName]) && isFinite(+d[yAxisInfo.columnName]);
             return hasYData && yIsNumeric;
@@ -596,7 +599,7 @@ export const performCurveFitting = (csvData, config, curveFits) => {
 
         // Filter data for this specific range
         const rangeData = validData.filter(d => d.x >= xMin && d.x <= xMax);
-        debugLog(`Curve fit ${index + 1}: ${rangeData.length} points in range [${xMin}, ${xMax}]`, rangeData);
+        console.log(`Curve fit ${index + 1}: ${rangeData.length} points in range [${xMin}, ${xMax}]`, rangeData);
 
         if (rangeData.length < 3) {
             debugWarn(`Insufficient data points in range [${xMin}, ${xMax}] for curve fit ${index + 1}: ${rangeData.length} points`);

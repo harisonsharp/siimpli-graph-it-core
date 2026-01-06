@@ -71,7 +71,7 @@ export class ExportService {
                     filters: [{ name: 'PNG', extensions: ['png'] }]
                 });
             } catch (tauriError) {
-                console.warn('Tauri dialog not available, using browser download:', tauriError.message);
+                console.warn('Tauri dialog not available, using browser download:', tauriError.message || tauriError);
                 // Fallback to direct browser download
                 filePath = filename;
             }

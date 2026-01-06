@@ -32,7 +32,7 @@ export class ScatterChartRenderer extends BaseChartRenderer {
      */
     constructor(options = {}) {
         super();
-        this.radius = options.radius || 5;
+        this.radius = options.radius || 2;
         this.opacity = options.opacity || 0.9;
     }
 
@@ -58,7 +58,6 @@ export class ScatterChartRenderer extends BaseChartRenderer {
      */
     render(g, data, scales, xAxisInfo, yAxisInfo, config, colorScale = null, colorInfo = null, seriesColor = null) {
         this.validateRenderParams(g, data, scales);
-
         const { xScale, yScale } = scales;
         const validData = this.filterValidData(data, xAxisInfo, yAxisInfo);
 

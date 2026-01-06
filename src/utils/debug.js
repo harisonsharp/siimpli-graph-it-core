@@ -3,7 +3,7 @@
  * In production builds, DEBUG is false and these blocks are tree-shaken out
  */
 
-export const DEBUG = import.meta.env.DEV;
+export const DEBUG = true;
 
 /**
  * Conditional debug log - eliminated in production builds
