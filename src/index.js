@@ -1,6 +1,6 @@
 /**
- * @siimpl/meta-plot-core
- * Shared logic and components for MetaPlot visualization system
+ * @siimpl/siimpli-graph-it-core
+ * Shared logic and components for SiimpliGraphIt visualization system
  */
 
 // Constants

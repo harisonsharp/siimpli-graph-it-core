@@ -14,12 +14,13 @@
     "author": "Siimpl",
     "license": "ISC",
     "dependencies": {
+        "@tauri-apps/plugin-dialog": "^2.0.0",
+        "@tauri-apps/plugin-fs": "^2.0.0",
+        "@tauri-apps/plugin-shell": "^2.0.0",
         "d3": "^7.9.0",
+        "prop-types": "^15.8.1",
         "react": "^18.3.1",
         "react-dom": "^18.3.1",
-        "prop-types": "^15.8.1",
-        "@tauri-apps/plugin-fs": "^2.0.0",
-        "@tauri-apps/plugin-dialog": "^2.0.0",
-        "@tauri-apps/plugin-shell": "^2.0.0"
+        "siimpli-graph-it": "file:../siimpli-graph-it"
     }
 }
