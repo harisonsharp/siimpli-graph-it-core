@@ -27,6 +27,30 @@
 import { color } from "d3";
 import { debugLog, debugWarn } from './debug.js';
 
+/**
+ * Parse a value into a number, handling comma-separated thousands
+ * @param {string|number} value - Value to parse
+ * @returns {number} Parsed number
+ */
+export const parseNumber = (value) => {
+    if (typeof value === 'number') return value;
+    if (value instanceof Date) return value.getTime();
+    if (typeof value === 'string') {
+        // Remove commas and trim
+        const clean = value.replace(/,/g, '').trim();
+        if (clean === '') return NaN;
+
+        // Try strict numeric parsing first
+        const num = Number(clean);
+        if (!isNaN(num)) return num;
+
+        // Try date parsing for date strings
+        const dateTs = Date.parse(clean);
+        if (!isNaN(dateTs)) return dateTs;
+    }
+    return NaN;
+};
+
 export const determineGraphType = (headers) => {
     /** Called in Batch mode
      * Automatically determine graph type based on number of columns

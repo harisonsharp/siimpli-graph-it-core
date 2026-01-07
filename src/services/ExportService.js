@@ -84,7 +84,9 @@ export class ExportService {
                     WATERMARK_CONFIG,
                     generateWatermarkTile,
                     logoImage,
-                    filePath
+                    filePath,
+                    null, // margin (null to use defaults)
+                    3     // scale factor (3x resolution)
                 );
 
                 // If Tauri save failed, use browser download

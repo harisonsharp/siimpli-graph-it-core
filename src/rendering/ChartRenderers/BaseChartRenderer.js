@@ -22,6 +22,9 @@
  */
 
 import { DataValidator } from '../../core/validation/DataValidator.js';
+import { ScaleFactory } from '../ScaleFactory.js';
+import { debugLog, debugWarn } from '../../utils/debug.js';
+import { parseNumber } from '../../utils/dataUtils.js';
 
 export class BaseChartRenderer {
     /**
@@ -63,8 +66,8 @@ export class BaseChartRenderer {
             const xValid = xValue !== undefined &&
                 xValue !== null &&
                 xValue !== '' &&
-                !isNaN(+xValue) &&
-                isFinite(+xValue);
+                !isNaN(parseNumber(xValue)) &&
+                isFinite(parseNumber(xValue));
 
             if (!xValid) return false;
 
@@ -74,7 +77,7 @@ export class BaseChartRenderer {
                 return false; // Still filter out completely missing Y values for single series
             }
 
-            return !isNaN(+yValue) && isFinite(+yValue);
+            return !isNaN(parseNumber(yValue)) && isFinite(parseNumber(yValue));
         });
     }
 
@@ -118,11 +121,12 @@ export class BaseChartRenderer {
      * @returns {string} Color value
      */
     getPointColor(dataPoint, colorScale, colorInfo, config, fallbackColor) {
-        const series = config.series.filter(s => s.yAxis.split('::')[1] === dataPoint._sourceFile && s.yAxis.split('::')[0] === Object.keys(dataPoint)[1]);
+        const series = config.series.filter(s => s.yAxis.split('::')[1] === dataPoint._sourceFile && Array.from(Object.keys(dataPoint)).includes(s.yAxis.split('::')[0]));
         if (series.length === 0) {
+            debugWarn('[BASE_CHART_RENDERER - getPointColor] No series found for data point when getting color', dataPoint);
             return fallbackColor || this.getDefaultColor();
         } else {
-            return series[0].color;
+            return ScaleFactory.resolveColor(series[0].color);
         }
         // if (config.colorGrading || colorScale || colorInfo) {
         //     const value = dataPoint[colorInfo.columnName];
@@ -206,12 +210,12 @@ export class BaseChartRenderer {
                 return xScale(xValue) + xScale.bandwidth() / 2;
             } else {
                 // Linear scale
-                return xScale(+xValue);
+                return xScale(parseNumber(xValue));
             }
         });
 
         // Calculate y positions
-        const yPositions = validData.map(d => yScale(+d[yAxisInfo.columnName]));
+        const yPositions = validData.map(d => yScale(parseNumber(d[yAxisInfo.columnName])));
 
         return {
             xMin: Math.min(...xPositions),

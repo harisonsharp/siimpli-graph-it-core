@@ -1,5 +1,6 @@
 import * as d3 from 'd3';
 import { generateContours } from '../utils/graphUtils.js';
+import { parseNumber } from '../utils/dataUtils.js';
 import { ScaleFactory } from '../rendering/ScaleFactory.js';
 import { ChartRendererFactory } from '../rendering/ChartRenderers/ChartRendererFactory.js';
 import { CanvasSizer } from './CanvasSizer.js';
@@ -161,8 +162,16 @@ export class GraphService {
                 return yValue !== undefined &&
                     yValue !== null &&
                     yValue !== '' &&
-                    !isNaN(yValue);
+                    !isNaN(parseNumber(yValue));
             });
+
+            if (seriesValidData.length === 0) {
+                // Skip this series if no valid data points exist (avoids DataValidator error)
+                // This allows "partial data" scenarios where other series might have data,
+                // or where this series is just empty/placeholder.
+                debugLog(`[GraphService] Series ${i} (${series.yAxisInfo.columnName}) has no valid data points. Skipping rendering.`);
+                return;
+            }
 
             debugLog(`[GraphService] Series ${i} (${series.graphType}):`, {
                 totalValidData: validData.length,

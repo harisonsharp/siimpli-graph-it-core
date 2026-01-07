@@ -22,6 +22,8 @@
 
 import * as d3 from 'd3';
 import { BaseChartRenderer } from './BaseChartRenderer.js';
+import { debugLog, debugWarn } from '../../utils/debug.js';
+import { parseNumber } from '../../utils/dataUtils.js';
 
 export class ScatterChartRenderer extends BaseChartRenderer {
     /**
@@ -74,25 +76,31 @@ export class ScatterChartRenderer extends BaseChartRenderer {
                 return xScale(xValue) + xScale.bandwidth() / 2;
             } else {
                 // Linear scale - direct mapping
-                return xScale(+xValue);
+                return xScale(parseNumber(xValue));
             }
         };
-
+        let finalRadius = config.series.filter(seriesItem => {
+            let seriesItemSplit = seriesItem.yAxis.split('::');
+            let retVal = seriesItemSplit[0] === yAxisInfo.columnName && seriesItemSplit[1] === yAxisInfo.fileName ? true : false;
+            return retVal;
+        })[0].strokeWidth;
         // Create circles for each data point
         g.selectAll('.dot')
             .data(validData)
             .enter()
             .append('circle')
             .attr('class', 'dot')
-            .attr('r', this.radius)
+            .attr('r', finalRadius || this.radius)
             .attr('cx', getXPosition)
-            .attr('cy', d => yScale(+d[yAxisInfo.columnName]))
+            .attr('cy', d => yScale(parseNumber(d[yAxisInfo.columnName])))
             .style('fill', d => this.getPointColor(d, colorScale, colorInfo, config, seriesColor))
             .style('opacity', this.opacity)
             .style('stroke', '#000')
             .style('stroke-width', 0.5)
             .append('title') // Add tooltip
             .text(d => `${xAxisInfo.columnName}: ${d[xAxisInfo.columnName]}\n${yAxisInfo.columnName}: ${d[yAxisInfo.columnName]}`);
+
+        console.log('Scatter chart rendered successfully', g.selectAll('.dot').data(), g);
     }
 
     /**

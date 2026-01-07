@@ -3,6 +3,7 @@ import { writeFile } from '@tauri-apps/plugin-fs';
 import { debugLog, debugWarn } from './debug.js';
 import { parseColumnId } from './columnUtils.js';
 import { drawAxes } from './axisUtils.js';
+import { ScaleFactory } from '../rendering/ScaleFactory.js';
 /**
  * @fileoverview Utility functions for D3.js graph operations, mathematical computations, and export functionality.
  * Provides column parsing, contour generation, axis rendering, legend creation, and PNG export capabilities
@@ -222,12 +223,12 @@ export const drawContourLegend = (svg, contourInfo, thresholds, contourColorScal
 export const drawSeriesLegend = (svg, seriesInfo, colorScale, graphDimensions, margin, xOffset = 90) => {
     const legend = svg.append("g")
         .attr("transform", `translate(${graphDimensions.width - margin.right + xOffset}, ${margin.top})`);
-
+    debugLog('[DRAW_SERIES_LEGEND] all', svg, seriesInfo, colorScale, graphDimensions, margin, xOffset);
     seriesInfo.forEach((series, i) => {
         const legendItem = legend.append("g")
             .attr("transform", `translate(0, ${i * 25})`);
 
-        const color = colorScale(series.yAxisInfo.columnName);
+        const color = ScaleFactory.resolveColor(series.color) || colorScale(series.yAxisInfo.columnName);
         const graphType = series.graphType || 'scatter';
 
         // Draw different shapes based on series type
@@ -271,54 +272,55 @@ export const drawSeriesLegend = (svg, seriesInfo, colorScale, graphDimensions, m
             .attr("y", 12)
             .style("font-family", "sans-serif")
             .style("font-size", "12px")
-            .text(series.yAxisInfo.columnName === '__frequency__' ? 'Frequency' : series.yAxisInfo.columnName);
+            .text(series.yAxisInfo.columnName === '__frequency__' ? 'Frequency' : series.titleName || series.yAxisInfo.columnName);
     });
 };
 
-export const exportGraphToPNG = async (svgRef, canvasRef, graphDimensions, WATERMARK_CONFIG, generateWatermarkTile, logoImage, outputPath, margin = null) => {
+export const exportGraphToPNG = async (svgRef, canvasRef, graphDimensions, WATERMARK_CONFIG, generateWatermarkTile, logoImage, outputPath, margin = null, scale = 1) => {
     const svgNode = svgRef.current || svgRef;
     const { width, height } = graphDimensions;
 
-    // Find and temporarily remove ALL image elements from SVG (including logo)
-    // This prevents broken image placeholders in the exported PNG
-    const imageElements = svgNode.querySelectorAll('image');
-    const removedImages = [];
+    // Clone the SVG node to avoid modifying the live DOM
+    const clone = svgNode.cloneNode(true);
 
+    // Find and remove all image elements from the CLONE
+    // This prevents broken image placeholders in the exported PNG
+    const imageElements = clone.querySelectorAll('image');
     imageElements.forEach(imgEl => {
         if (imgEl.parentNode) {
-            removedImages.push({
-                element: imgEl,
-                parent: imgEl.parentNode,
-                nextSibling: imgEl.nextSibling
-            });
             imgEl.parentNode.removeChild(imgEl);
         }
     });
 
-    // Serialize SVG to string
-    const svgData = new XMLSerializer().serializeToString(svgNode);
-
-    // Restore all image elements back to the SVG
-    removedImages.forEach(({ element, parent, nextSibling }) => {
-        if (nextSibling) {
-            parent.insertBefore(element, nextSibling);
-        } else {
-            parent.appendChild(element);
+    // Handle scaling
+    if (scale !== 1) {
+        // Ensure viewBox exists for proper scaling
+        if (!clone.getAttribute('viewBox')) {
+            clone.setAttribute('viewBox', `0 0 ${width} ${height}`);
         }
-    });
+
+        // Update width and height to scaled values
+        clone.setAttribute('width', width * scale);
+        clone.setAttribute('height', height * scale);
+
+        // If the SVG uses internal styles/transform attributes that rely on pixels, 
+        // they should scale automatically via viewBox, but we ensure the root attributes are set.
+    }
+
+    // Serialize SVG to string
+    const svgData = new XMLSerializer().serializeToString(clone);
 
     const svgBlob = new Blob([svgData], { type: 'image/svg+xml;charset=utf-8' });
 
     // Use optimized canvas path with Image loading
-    // Note: createImageBitmap doesn't work with SVG blobs, so we use the Image loading approach
-    return exportWithOptimizedCanvas(svgBlob, canvasRef, width, height, WATERMARK_CONFIG, generateWatermarkTile, logoImage, margin, outputPath);
+    return exportWithOptimizedCanvas(svgBlob, canvasRef, width * scale, height * scale, WATERMARK_CONFIG, generateWatermarkTile, logoImage, margin, outputPath, scale);
 };
 
 /**
  * Optimized canvas export with Image loading
  * Uses standard canvas with Image loading approach (only reliable method for SVG)
  */
-function exportWithOptimizedCanvas(svgBlob, canvasRef, width, height, WATERMARK_CONFIG, generateWatermarkTile, logoImage, margin, outputPath) {
+function exportWithOptimizedCanvas(svgBlob, canvasRef, width, height, WATERMARK_CONFIG, generateWatermarkTile, logoImage, margin, outputPath, scale = 1) {
     const canvas = canvasRef.current || canvasRef || document.createElement('canvas');
     const ctx = canvas.getContext('2d');
     canvas.width = width;
@@ -344,7 +346,7 @@ function exportWithOptimizedCanvas(svgBlob, canvasRef, width, height, WATERMARK_
             URL.revokeObjectURL(url);
 
             // Draw logo
-            drawLogoToCanvas(ctx, logoImage, width, height, margin);
+            drawLogoToCanvas(ctx, logoImage, width, height, margin, scale);
 
             // Convert to PNG
             canvas.toBlob(async (blob) => {
@@ -385,12 +387,19 @@ function exportWithOptimizedCanvas(svgBlob, canvasRef, width, height, WATERMARK_
 /**
  * Helper: Draw logo onto canvas context
  */
-function drawLogoToCanvas(ctx, logoImage, width, height, margin) {
+function drawLogoToCanvas(ctx, logoImage, width, height, margin, scale = 1) {
     if (logoImage && logoImage.complete && logoImage.naturalWidth > 0) {
         if (logoImage.src && !logoImage.src.includes('data:') && logoImage.naturalWidth > 1 && logoImage.naturalHeight > 1) {
-            const usedMargin = margin || { top: 80, right: 320, bottom: 100, left: 100 };
+            const baseMargin = margin || { top: 80, right: 320, bottom: 100, left: 100 };
+            const usedMargin = {
+                top: baseMargin.top * scale,
+                right: baseMargin.right * scale,
+                bottom: baseMargin.bottom * scale,
+                left: baseMargin.left * scale
+            };
+
             const graphHeight = height - usedMargin.top - usedMargin.bottom;
-            const logoTargetWidth = 60;
+            const logoTargetWidth = 60 * scale;
             const aspectRatio = logoImage.naturalHeight / logoImage.naturalWidth;
             const logoHeight = logoTargetWidth * aspectRatio;
             const logoX = usedMargin.left - logoTargetWidth - 10;

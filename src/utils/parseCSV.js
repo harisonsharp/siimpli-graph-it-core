@@ -10,6 +10,8 @@
 /**
  * Helper to parse dates with multiple formats
  */
+
+import { debugLog, debugWarn } from './debug.js';
 const parseDate = (value) => {
     // 1. ISO Format (YYYY-MM-DD)
     if (/^\d{4}-\d{2}-\d{2}$/.test(value)) {
@@ -76,6 +78,35 @@ const parseDate = (value) => {
         }
     }
 
+    // 5. Month-Year (Mon-YYYY or Mon YYYY)
+    const monthYearMatch = value.match(/^([a-zA-Z]+)[- ](\d{4})$/);
+    if (monthYearMatch) {
+        const monthStr = monthYearMatch[1].toLowerCase();
+        const year = Number.parseInt(monthYearMatch[2], 10);
+
+        const monthMap = {
+            jan: 0, january: 0,
+            feb: 1, february: 1,
+            mar: 2, march: 2,
+            apr: 3, april: 3,
+            may: 4,
+            jun: 5, june: 5,
+            jul: 6, july: 6,
+            aug: 7, august: 7,
+            sep: 8, september: 8,
+            oct: 9, october: 9,
+            nov: 10, november: 10,
+            dec: 11, december: 11
+        };
+
+        const prefix = monthStr.substring(0, 3);
+        const monthIndex = monthMap[monthStr] !== undefined ? monthMap[monthStr] : monthMap[prefix];
+
+        if (monthIndex !== undefined) {
+            return new Date(year, monthIndex, 1);
+        }
+    }
+
     // Fallback to native parsing
     if (/[a-zA-Z]/.test(value) || /[-/_]/.test(value)) {
         const d = new Date(value);
@@ -117,8 +148,10 @@ const processRow = (line, headers, splitRegex, cleanValue) => {
         }
 
         // 3. Numbers
-        if (!Number.isNaN(Number(rawValue)) && rawValue.trim() !== '') {
-            row[header] = Number.parseFloat(rawValue);
+        // Try parsing with commas removed
+        const cleanNumberStr = rawValue.replace(/,/g, '');
+        if (!Number.isNaN(Number(cleanNumberStr)) && cleanNumberStr.trim() !== '') {
+            row[header] = Number.parseFloat(cleanNumberStr);
             return;
         }
 
@@ -144,6 +177,8 @@ export const parseCSV = (csvText) => {
     // Regex to split by comma, but ignore commas inside double quotes
     const splitRegex = /,(?=(?:(?:[^"]*"){2})*[^"]*$)/;
 
+
+
     // Helper to clean values: remove surrounding quotes and unescape double quotes
     const cleanValue = (val) => {
         const trimmed = val.trim();
@@ -153,7 +188,7 @@ export const parseCSV = (csvText) => {
         return trimmed;
     };
 
-    const headers = lines[0].split(splitRegex).map(h => cleanValue(h));
+    const headers = lines[0].split(splitRegex).map(h => cleanValue(h)).filter(h => h !== '');
 
     const data = lines.slice(1).map(line => processRow(line, headers, splitRegex, cleanValue));
 

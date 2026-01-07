@@ -170,6 +170,45 @@ export class CanvasSizer {
     }
 
     /**
+     * Update canvas size based on DOM bounding box (Synchronous)
+     * Performs immediate measurement. Use this during imperative generation flows.
+     * 
+     * @param {SVGElement} groupElement - Optional group to measure
+     * @returns {CanvasSizer} this for chaining
+     */
+    updateFromDOMSync(groupElement = null) {
+        try {
+            // Target the main content group or specified group
+            const target = groupElement || this.svgRoot.querySelector('g');
+
+            if (!target) {
+                console.warn('[CanvasSizer] No group element found for DOM measurement');
+                return this;
+            }
+
+            const bbox = target.getBBox();
+
+            if (!bbox || bbox.width === 0 || bbox.height === 0) {
+                console.warn('[CanvasSizer] Invalid bounding box from DOM');
+                return this;
+            }
+
+            this.lastExtents = {
+                xMin: bbox.x,
+                xMax: bbox.x + bbox.width,
+                yMin: bbox.y,
+                yMax: bbox.y + bbox.height,
+                source: 'dom'
+            };
+
+        } catch (error) {
+            console.error('[CanvasSizer] Synchronous DOM measurement failed:', error);
+        }
+
+        return this;
+    }
+
+    /**
      * Calculate required dimensions and apply to SVG
      * Call this after updating extents to resize the canvas
      * 

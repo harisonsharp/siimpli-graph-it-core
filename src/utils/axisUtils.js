@@ -140,8 +140,19 @@ const drawXAxis = (g, xScale, xAxisY, xAxisLabelOffset, xAxisLabel, graphType, d
                 });
         }
     } else if (!xScale.bandwidth) {
-        // Numeric X-Axis (Scatter, Line, etc.)
-        axisGenerator.tickFormat(d => formatNumber(d, 6));
+        // Numeric or Time X-Axis
+        const domain = xScale.domain();
+        const isTimeScale = domain.length > 0 && domain[0] instanceof Date;
+
+        if (isTimeScale) {
+            // Let D3 handle time formatting or use a smart format
+            // axisGenerator.tickFormat(d3.timeFormat("%b %Y")); 
+            // Default D3 time format is usually good, but we can enforce if needed based on range duration.
+            // For now, removing the formatNumber override is sufficient.
+        } else {
+            // Numeric X-Axis (Scatter, Line, etc.)
+            axisGenerator.tickFormat(d => formatNumber(d, 6));
+        }
     }
 
     // Intelligent tick skipping for band scales (categorical/discrete)
@@ -185,6 +196,18 @@ const drawXAxis = (g, xScale, xAxisY, xAxisLabelOffset, xAxisLabel, graphType, d
             .attr('dx', '-.8em')
             .attr('dy', '.15em')
             .attr('transform', 'rotate(-45)');
+    } else {
+        // Check for Time Scale rotation
+        const domain = xScale.domain();
+        const isTimeScale = domain.length > 0 && domain[0] instanceof Date;
+
+        // if (isTimeScale) {
+        //     xAxis.selectAll('text')
+        //         .style('text-anchor', 'end')
+        //         .attr('dx', '-.8em')
+        //         .attr('dy', '.15em')
+        //         .attr('transform', 'rotate(-45)');
+        // }
     }
 
     return xAxis;

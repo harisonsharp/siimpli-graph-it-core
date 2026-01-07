@@ -22,6 +22,9 @@
 
 import * as d3 from 'd3';
 import { BaseChartRenderer } from './BaseChartRenderer.js';
+import { ScaleFactory } from '../ScaleFactory.js';
+import { debugLog, debugWarn } from '../../utils/debug.js';
+import { parseNumber } from '../../utils/dataUtils.js';
 
 export class LineChartRenderer extends BaseChartRenderer {
     /**
@@ -70,22 +73,27 @@ export class LineChartRenderer extends BaseChartRenderer {
         this.validateRenderParams(g, data, scales);
         const { xScale, yScale } = scales;
         const validData = this.filterValidData(data, xAxisInfo, yAxisInfo);
-
         if (validData.length < this.getMinimumDataPoints()) {
             console.warn(`Insufficient data points for line chart: need at least ${this.getMinimumDataPoints()}, got ${validData.length}`);
             return;
         }
 
         // Sort data by x-value for proper line connection
+        // Sort data by x-value for proper line connection
         const sortedData = validData.sort((a, b) => {
             const aVal = a[xAxisInfo.columnName];
             const bVal = b[xAxisInfo.columnName];
 
-            // Handle both numeric and string comparisons
-            if (typeof aVal === 'string' || typeof bVal === 'string') {
-                return String(aVal).localeCompare(String(bVal));
+            // Try numeric comparison first (handles numbers and dates via updated parseNumber)
+            const aNum = parseNumber(aVal);
+            const bNum = parseNumber(bVal);
+
+            if (!isNaN(aNum) && !isNaN(bNum)) {
+                return aNum - bNum;
             }
-            return +aVal - +bVal;
+
+            // Fallback to string comparison for purely categorical data
+            return String(aVal).localeCompare(String(bVal));
         });
 
         // Handle both band and linear scales for x-axis
@@ -96,7 +104,7 @@ export class LineChartRenderer extends BaseChartRenderer {
                 return xScale(xValue) + xScale.bandwidth() / 2;
             } else {
                 // Linear scale - direct mapping
-                return xScale(+xValue);
+                return xScale(parseNumber(xValue));
             }
         };
 
@@ -106,7 +114,7 @@ export class LineChartRenderer extends BaseChartRenderer {
         // Create line generator
         const lineGenerator = d3.line()
             .x(getXPosition)
-            .y(d => yScale(+d[yAxisInfo.columnName]));
+            .y(d => yScale(parseNumber(d[yAxisInfo.columnName])));
 
         // Apply curve interpolation
         if (d3[curveType]) {
@@ -123,15 +131,15 @@ export class LineChartRenderer extends BaseChartRenderer {
         else if (lineStyle === 'dotted') strokeDashArray = '2,4';
         else if (lineStyle === 'dash-dot') strokeDashArray = '10,5,2,5';
 
-        const finalColor = seriesConfig.color || seriesColor || this.getDefaultColor();
-
+        const finalColor = ScaleFactory.resolveColor(seriesConfig.color || seriesColor) || this.getDefaultColor();
+        const finalStrokeWidth = seriesConfig.strokeWidth || this.strokeWidth;
         // Draw the line
         g.append('path')
             .datum(sortedData)
             .attr('class', 'line-chart')
             .attr('fill', 'none')
             .attr('stroke', finalColor)
-            .attr('stroke-width', this.strokeWidth)
+            .attr('stroke-width', finalStrokeWidth)
             .attr('stroke-linejoin', 'round')
             .attr('stroke-linecap', 'round')
             .attr('stroke-dasharray', strokeDashArray)
@@ -145,7 +153,7 @@ export class LineChartRenderer extends BaseChartRenderer {
                 .append('circle')
                 .attr('class', 'line-point')
                 .attr('cx', getXPosition)
-                .attr('cy', d => yScale(+d[yAxisInfo.columnName]))
+                .attr('cy', d => yScale(parseNumber(d[yAxisInfo.columnName])))
                 .attr('r', (this.strokeWidth || 3) + 1) // Slightly larger than line width
                 .attr('fill', finalColor)
                 .attr('stroke', '#fff')

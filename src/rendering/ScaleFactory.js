@@ -144,6 +144,17 @@ export class ScaleFactory {
     };
 
     /**
+     * Resolve a color string to a hex code if it exists in the custom color map
+     * @param {string} color - Color name or hex code
+     * @returns {string} Resolved hex color or original string
+     */
+    static resolveColor(color) {
+        if (!color) return color;
+        const normalized = color.toLowerCase().trim();
+        return this.CUSTOM_COLOR_MAP[normalized] || color;
+    }
+
+    /**
      * Create ordinal color scale for series differentiation
      * @param {Array<string>} seriesNames - Array of series identifiers
      * @param {Array<Object>} seriesInfo - List of series configuration objects (optional)
@@ -216,8 +227,19 @@ export class ScaleFactory {
         const scaleType = this.inferScaleType(xValues);
 
         if (scaleType === 'time') {
-            const xExtent = d3.extent(xValues);
-            xScale = this.createTimeScale(xExtent, [0, width]);
+            // Parse values to dates if they are strings
+            const dateValues = xValues.map(v => v instanceof Date ? v : new Date(v))
+                .filter(d => !isNaN(d.getTime())); // Filter invalid dates
+
+            if (dateValues.length === 0) {
+                // Fallback if parsing fails
+                console.warn('Failed to parse date values for time scale, falling back to band scale');
+                const uniqueXValues = [...new Set(xValues)];
+                xScale = this.createBandScale(uniqueXValues, [0, width], 0.5);
+            } else {
+                const xExtent = d3.extent(dateValues);
+                xScale = this.createTimeScale(xExtent, [0, width]);
+            }
         } else if (scaleType === 'band' || isCategorical) {
             // Create band scale for categorical/bar chart data
             const uniqueXValues = [...new Set(xValues)];
@@ -465,7 +487,19 @@ export class ScaleFactory {
         if (typeof firstValue === 'boolean') return 'band';
 
         // Check if categorical (string)
-        if (typeof firstValue === 'string') return 'band';
+        if (typeof firstValue === 'string') {
+            // Check if string looks like a date
+            const dateValue = new Date(firstValue);
+            if (!isNaN(dateValue.getTime()) && firstValue.length > 4) {
+                // Basic heuristic: parsable as date and not just a short number-like string (e.g. "2020")
+                // Check multiple values to be sure, avoiding false positives like "1.2" (which new Date() might handle weirdly depending on locale?)
+                // Actually new Date("1.2") is usually Invalid Date. new Date("2020") is valid.
+                // Let's iterate a few values to confirm
+                const looksLikeDate = values.slice(0, 5).every(v => !isNaN(new Date(v).getTime()));
+                if (looksLikeDate) return 'time';
+            }
+            return 'band';
+        }
 
         // Check if numeric
         if (typeof firstValue === 'number' && isFinite(firstValue)) {

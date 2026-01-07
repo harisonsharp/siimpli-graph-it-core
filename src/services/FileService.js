@@ -36,6 +36,7 @@ export class FileService {
                     const { readTextFile } = await import('@tauri-apps/plugin-fs');
                     const csvText = await readTextFile(file.path);
                     const { headers, data } = parseCSV(csvText);
+
                     if (!headers || headers.length === 0) throw new Error('No headers found');
                     newFiles.push({ name: file.name, headers });
                     const taggedData = data.map(row => ({ ...row, _sourceFile: file.name }));

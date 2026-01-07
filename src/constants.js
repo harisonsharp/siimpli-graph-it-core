@@ -49,6 +49,10 @@ export const DEFAULT_SERIES_CONFIG = {
     yAxis: '',
     graphType: 'scatter',
     axisAssignment: 'primary', // 'primary' or 'secondary'
+    titleName: '',
+    color: '',
+    strokeWidth: 2,
+
 };
 
 export const DEFAULT_GRAPH_CONFIG = {
