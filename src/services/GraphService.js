@@ -153,10 +153,17 @@ export class GraphService {
             });
             const seriesValidData = validData.filter((d, index) => {
                 if (series.graphType === 'histogram') return true;
-                // Check for file name match if available to avoid column name collisions
-                if (yAxisInfo.fileName && d._sourceFile && d._sourceFile !== yAxisInfo.fileName) {
+                // File matching: Only exclude rows when BOTH file context exists AND column is absent
+                // This preserves column collision protection while supporting joined datasets
+                const hasFileContext = yAxisInfo.fileName && d._sourceFile;
+                const isSameFile = !hasFileContext || d._sourceFile === yAxisInfo.fileName;
+                const columnExistsInRow = d.hasOwnProperty(yAxisInfo.columnName);
+
+                // If files don't match, only include if column actually exists in this row
+                if (hasFileContext && !isSameFile && !columnExistsInRow) {
                     return false;
                 }
+
                 const yValue = d[yAxisInfo.columnName];
 
                 return yValue !== undefined &&
@@ -169,6 +176,27 @@ export class GraphService {
                 // Skip this series if no valid data points exist (avoids DataValidator error)
                 // This allows "partial data" scenarios where other series might have data,
                 // or where this series is just empty/placeholder.
+                // Detailed debug for skipped series
+                if (validData.length > 0) {
+                    const sampleSize = Math.min(validData.length, 3);
+                    const samples = validData.slice(0, sampleSize);
+                    debugLog(`[GraphService] FILTERING DEBUG for Series ${i} (${series.yAxisInfo.columnName}):`);
+                    debugLog(`[GraphService] yAxisInfo:`, yAxisInfo);
+                    samples.forEach((d, idx) => {
+                        const val = d[yAxisInfo.columnName];
+                        const parsed = parseNumber(val);
+                        const fileMatch = (!yAxisInfo.fileName || !d._sourceFile || d._sourceFile === yAxisInfo.fileName);
+                        debugLog(`[GraphService] Sample ${idx}:`, {
+                            rawVal: val,
+                            parsed: parsed,
+                            sourceFile: d._sourceFile,
+                            targetFile: yAxisInfo.fileName,
+                            fileMatch: fileMatch,
+                            colName: yAxisInfo.columnName,
+                            rowKeys: Object.keys(d)
+                        });
+                    });
+                }
                 debugLog(`[GraphService] Series ${i} (${series.yAxisInfo.columnName}) has no valid data points. Skipping rendering.`);
                 return;
             }

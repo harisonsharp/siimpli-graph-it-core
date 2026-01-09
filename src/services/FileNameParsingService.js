@@ -44,6 +44,7 @@ export class FilenameParsingService {
 
         try {
             // Extract date (first 6 digits)
+            debugLog('Extracting date from filename:', baseName);
             const dateMatch = baseName.match(/^(\d{6})/);
             if (dateMatch) {
                 result.date = dateMatch[1];

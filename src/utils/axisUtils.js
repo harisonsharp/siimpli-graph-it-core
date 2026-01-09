@@ -23,7 +23,7 @@
  */
 
 import * as d3 from 'd3';
-
+import { debugLog } from './debug.js';
 /**
  * Calculate axis intercept positions based on configuration
  * @param {Array<number>} xExtent - [min, max] for x-axis
@@ -199,15 +199,15 @@ const drawXAxis = (g, xScale, xAxisY, xAxisLabelOffset, xAxisLabel, graphType, d
     } else {
         // Check for Time Scale rotation
         const domain = xScale.domain();
-        const isTimeScale = domain.length > 0 && domain[0] instanceof Date;
+        const isTimeScale = domain.length > 0 && domain.some(d => d instanceof Date);
 
-        // if (isTimeScale) {
-        //     xAxis.selectAll('text')
-        //         .style('text-anchor', 'end')
-        //         .attr('dx', '-.8em')
-        //         .attr('dy', '.15em')
-        //         .attr('transform', 'rotate(-45)');
-        // }
+        if (isTimeScale) {
+            xAxis.selectAll('text')
+                .style('text-anchor', 'end')
+                .attr('dx', '-.8em')
+                .attr('dy', '.15em')
+                .attr('transform', 'rotate(-45)');
+        }
     }
 
     return xAxis;
@@ -320,15 +320,20 @@ export const drawAxes = (
     data = null, // Added data param
     xAxisInfo = null // Added xAxisInfo param
 ) => {
+    debugLog('[drawAxes] g, xScale, yScale, height, width, margin, xAxisLabel, yAxisLabel, graphType, config, axisColors, seriesInfo, seriesColorScale, globalSettings, data, xAxisInfo', g, xScale, yScale, height, width, margin, xAxisLabel, yAxisLabel, graphType, config, axisColors, seriesInfo, seriesColorScale, globalSettings, data, xAxisInfo);
     // Check if dual-axis mode (yScale is an object with primary/secondary)
+    debugLog('[drawAxes] yScale', yScale);
     const isDualAxis = yScale && typeof yScale === 'object' && yScale.primary && yScale.secondary;
+    debugLog('[drawAxes] isDualAxis', isDualAxis);
     const primaryYScale = isDualAxis ? yScale.primary : yScale;
     const secondaryYScale = isDualAxis ? yScale.secondary : null;
+    debugLog('[drawAxes] primaryYScale, secondaryYScale', primaryYScale, secondaryYScale);
 
     // Check if labels are also dual
+    const isDualUnits = config.dualUnits;
     const isDualLabel = yAxisLabel && typeof yAxisLabel === 'object' && yAxisLabel.primary;
-    const primaryLabel = isDualLabel ? yAxisLabel.primary : yAxisLabel;
-    const secondaryLabel = isDualLabel ? yAxisLabel.secondary : null;
+    const primaryLabel = isDualUnits ? `${yAxisLabel} (${config.fromUnits})` : isDualLabel ? yAxisLabel.primary : yAxisLabel;
+    const secondaryLabel = isDualUnits ? `${yAxisLabel} (${config.toUnits})` : isDualLabel ? yAxisLabel.secondary : null;
 
     // Override y-axis label for histogram
     let finalPrimaryLabel = primaryLabel;
@@ -379,7 +384,7 @@ export const drawAxes = (
 
     drawXAxis(g, xScale, xAxisY, 50, xAxisLabel, graphType, data, xAxisInfo);
     drawPrimaryYAxis(g, primaryYScale, yAxisX, primaryColor);
-
+    debugLog('[drawAxes] Secondary Y Scale and isDualAxis: ', secondaryYScale, isDualAxis);
     if (isDualAxis && secondaryYScale) {
         drawSecondaryYAxis(g, secondaryYScale, width, secondaryColor);
     }

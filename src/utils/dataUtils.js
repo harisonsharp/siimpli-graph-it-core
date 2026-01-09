@@ -51,6 +51,35 @@ export const parseNumber = (value) => {
     return NaN;
 };
 
+/**
+ * Convert USD/dmt to USD/unit
+ * @param {string} unit - Unit to convert to
+ * @returns {number} Conversion factor
+ */
+export const dmtToUnitFactor = (unit) => {
+  // 1 metric tonne = 1000 kg
+  const KG_PER_METRIC_TONNE = 1000; // [web:10][web:13]
+
+  // 1 troy ounce = 31.1034768 g = 0.0311034768 kg [web:3][web:5]
+  const KG_PER_TROY_OUNCE = 0.0311034768;
+
+  // 1 lb = 0.45359237 kg (exact, by definition) [web:9][web:12]
+  const KG_PER_POUND = 0.45359237;
+
+  switch (unit) {
+    case "troy oz":
+      // USD/dmt -> USD/kg -> USD/troy oz
+      return (KG_PER_METRIC_TONNE / KG_PER_TROY_OUNCE);
+
+    case "lbs":
+      // USD/dmt -> USD/kg -> USD/lb
+      return (KG_PER_METRIC_TONNE / KG_PER_POUND);
+
+    default:
+      throw new Error('Unsupported unit. Use "troy oz" or "lbs".');
+  }
+}
+
 export const determineGraphType = (headers) => {
     /** Called in Batch mode
      * Automatically determine graph type based on number of columns

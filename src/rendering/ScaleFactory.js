@@ -22,7 +22,7 @@
 import * as d3 from 'd3';
 import { DataValidator } from '../core/validation/DataValidator.js';
 import { generateCustomBins } from '../utils/histogram.js';
-
+import { debugLog, debugWarn } from '../utils/debug.js';
 export class ScaleFactory {
     /**
      * Color scheme interpolators
@@ -56,7 +56,7 @@ export class ScaleFactory {
      * @param {number} bottomPadding - Bottom padding as percentage (default 0.05 = 5%)
      * @returns {Array<number>} [min, max] with padding applied
      */
-    static addDomainPadding(min, max, topPadding = 0.15, bottomPadding = 0.05) {
+    static addDomainPadding(min, max, topPadding = 0.0, bottomPadding = 0.00) {
         const range = max - min;
 
         // Handle edge case where min === max
@@ -213,24 +213,24 @@ export class ScaleFactory {
 
         // Separate series by axis assignment
         const primarySeries = seriesInfo.filter(s => s.axisAssignment !== 'secondary');
-        const secondarySeries = seriesInfo.filter(s => s.axisAssignment === 'secondary');
+        const secondarySeries = seriesInfo.filter(s => s.axisAssignment === 'secondary' || config.dualUnits);
         const hasDualAxis = secondarySeries.length > 0;
 
         // Check if we need band scale for categorical data or bar charts
         const hasBarSeries = seriesInfo.some(s => s.graphType === 'bar');
         const xValues = data.map(d => d[xAxisInfo.columnName]).filter(v => v !== undefined && v !== null);
-
+        debugLog('ScaleFactory.createScalesForGraph', 'xValues', xValues);
         // Determine if x-axis should be categorical (band scale)
         const isCategorical = hasBarSeries || this.shouldUseBandScale(xValues);
 
         let xScale;
         const scaleType = this.inferScaleType(xValues);
-
+        debugLog('ScaleFactory.createScalesForGraph', 'scaleType', scaleType);
         if (scaleType === 'time') {
             // Parse values to dates if they are strings
             const dateValues = xValues.map(v => v instanceof Date ? v : new Date(v))
                 .filter(d => !isNaN(d.getTime())); // Filter invalid dates
-
+            debugLog('ScaleFactory.createScalesForGraph', 'dateValues', dateValues);
             if (dateValues.length === 0) {
                 // Fallback if parsing fails
                 console.warn('Failed to parse date values for time scale, falling back to band scale');
@@ -257,11 +257,15 @@ export class ScaleFactory {
         }
 
         // Create Y scale(s)
-        if (hasDualAxis) {
+        debugLog('ScaleFactory.createScalesForGraph', 'config', config);
+
+        if (hasDualAxis || config.dualUnits) {
+            debugLog('ScaleFactory.createScalesForGraph', 'hasDualAxis', hasDualAxis);
+            debugLog('ScaleFactory.createScalesForGraph', 'config.dualUnits', config.dualUnits);
             // Check for matching scale requirement
             if (config.secondaryYAxisScale === 'matching') {
                 // Create a single scale for ALL series (union of domains)
-                const unifiedYScale = this.createYScale(data, seriesInfo, height, config, hasBarSeries, xAxisInfo);
+                const unifiedYScale = this.createYScale('primary', data, seriesInfo, height, config, hasBarSeries, xAxisInfo);
                 return {
                     xScale,
                     yScale: {
@@ -272,8 +276,8 @@ export class ScaleFactory {
             }
 
             // Create separate scales for primary and secondary axes
-            const primaryYScale = this.createYScale(data, primarySeries, height, config, hasBarSeries, xAxisInfo);
-            const secondaryYScale = this.createYScale(data, secondarySeries, height, config, false, xAxisInfo);
+            const primaryYScale = this.createYScale('primary', data, primarySeries, height, config, hasBarSeries, xAxisInfo);
+            const secondaryYScale = this.createYScale('secondary', data, secondarySeries, height, config, false, xAxisInfo);
 
             return {
                 xScale,
@@ -284,7 +288,7 @@ export class ScaleFactory {
             };
         } else {
             // Single Y scale
-            const yScale = this.createYScale(data, primarySeries, height, config, hasBarSeries, xAxisInfo);
+            const yScale = this.createYScale('primary', data, primarySeries, height, config, hasBarSeries, xAxisInfo);
             return { xScale, yScale };
         }
     }
@@ -298,7 +302,7 @@ export class ScaleFactory {
      * @param {boolean} hasBarSeries - Whether any series is a bar chart
      * @returns {d3.Scale} Y scale
      */
-    static createYScale(data, seriesInfo, height, config, hasBarSeries, xAxisInfo) {
+    static createYScale(axis, data, seriesInfo, height, config, hasBarSeries, xAxisInfo) {
         if (seriesInfo.length === 0) {
             // No series, create default scale
             return this.createLinearScale([0, 100], [height, 0]);
@@ -318,7 +322,7 @@ export class ScaleFactory {
                 yMax = d3.max(stackedData, series => d3.max(series, d => d[1]));
             }
         }
-
+        debugLog('[createYScale] series info, size, type: ', seriesInfo, seriesInfo.length, typeof seriesInfo);
         if (!isStacked || config.graphType !== 'bar') {
             // For non-stacked charts, find min/max across all series
             seriesInfo.forEach(s => {
@@ -329,6 +333,13 @@ export class ScaleFactory {
                         const maxCount = bins.length > 0 ? d3.max(bins, bin => bin.values.length) : 0;
                         yMin = Math.min(yMin, 0);
                         yMax = Math.max(yMax, maxCount);
+                    }
+                } else if (config.dualUnits && axis === 'secondary') {
+                    const yValues = data.map(d => +d[s.yAxisInfo.columnName] / config.scaleFactor).filter(v => !isNaN(v) && isFinite(v));
+                    if (yValues.length > 0) {
+                        const yExtent = d3.extent(yValues);
+                        yMin = Math.min(yMin, yExtent[0]);
+                        yMax = Math.max(yMax, yExtent[1]);
                     }
                 } else {
                     const yValues = data.map(d => +d[s.yAxisInfo.columnName]).filter(v => !isNaN(v) && isFinite(v));
@@ -355,10 +366,11 @@ export class ScaleFactory {
         // Add visual padding to create space at top and bottom of chart
         // This provides better visual spacing and prevents data from touching edges
         // For bar charts or when minimum is non-negative, don't pad below 0
-        const shouldStartAtZero = hasBarSeries || yMin >= 0;
+        const shouldStartAtZero = hasBarSeries;
         const bottomPad = shouldStartAtZero ? 0 : 0.05;
+        const topPad = shouldStartAtZero ? 0 : 0.05;
         const finalMin = shouldStartAtZero ? Math.min(0, yMin) : yMin;
-        const [paddedMin, paddedMax] = this.addDomainPadding(finalMin, yMax, 0.15, bottomPad);
+        const [paddedMin, paddedMax] = this.addDomainPadding(finalMin, yMax, topPad, bottomPad);
 
         return this.createLinearScale([paddedMin, paddedMax], [height, 0]);
     }
@@ -476,6 +488,7 @@ export class ScaleFactory {
      * @returns {string} Scale type: 'linear', 'band', 'time', 'log'
      */
     static inferScaleType(values) {
+
         if (values.length === 0) return 'linear';
 
         const firstValue = values[0];
@@ -490,6 +503,7 @@ export class ScaleFactory {
         if (typeof firstValue === 'string') {
             // Check if string looks like a date
             const dateValue = new Date(firstValue);
+
             if (!isNaN(dateValue.getTime()) && firstValue.length > 4) {
                 // Basic heuristic: parsable as date and not just a short number-like string (e.g. "2020")
                 // Check multiple values to be sure, avoiding false positives like "1.2" (which new Date() might handle weirdly depending on locale?)

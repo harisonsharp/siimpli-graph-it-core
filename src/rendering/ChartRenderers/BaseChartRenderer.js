@@ -56,9 +56,15 @@ export class BaseChartRenderer {
      */
     filterValidData(data, xAxisInfo, yAxisInfo) {
         return data.filter(d => {
-            if (yAxisInfo.fileName && d._sourceFile && d._sourceFile !== yAxisInfo.fileName) {
+            // File matching: Only exclude when files differ AND column doesn't exist in row
+            const hasFileContext = yAxisInfo.fileName && d._sourceFile;
+            const isSameFile = !hasFileContext || d._sourceFile === yAxisInfo.fileName;
+            const columnExistsInRow = d.hasOwnProperty(yAxisInfo.columnName);
+
+            if (hasFileContext && !isSameFile && !columnExistsInRow) {
                 return false;
             }
+
             const xValue = d[xAxisInfo.columnName];
             const yValue = d[yAxisInfo.columnName];
 

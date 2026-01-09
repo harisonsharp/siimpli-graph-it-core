@@ -31,7 +31,7 @@
  *
  * @relatedFiles BaseChartRenderer, GraphService, ExportService
  */
-
+import { debugLog, debugWarn } from "../utils/debug.js";
 export class CanvasSizer {
     /**
      * Default configuration values
@@ -43,9 +43,10 @@ export class CanvasSizer {
         minWidth: 400,
         minHeight: 300,
         minPadding: 10,
-        expandMode: 'expand', // 'expand' or 'scale'
+        expandMode: 'scale', // 'expand' or 'scale'
         dpiMultiplier: 1,
-        debounceMs: 100
+        debounceMs: 100,
+        maxLineWidthLegend: 40
     };
 
     /**
@@ -101,9 +102,10 @@ export class CanvasSizer {
      * @returns {CanvasSizer} this for chaining
      */
     updateFromData(extents) {
+        debugLog('[CanvasSizer.updateFromData]', extents);
         if (!extents || typeof extents.xMin !== 'number' || typeof extents.xMax !== 'number' ||
             typeof extents.yMin !== 'number' || typeof extents.yMax !== 'number') {
-            console.warn('[CanvasSizer] Invalid extents provided to updateFromData');
+            debugWarn('[CanvasSizer] Invalid extents provided to updateFromData');
             return this;
         }
 

@@ -88,7 +88,7 @@ export class FileService {
     static filterValidData(csvData, xAxisInfo, yAxisInfos) {
         const hasYAxes = Array.isArray(yAxisInfos) && yAxisInfos.length > 0;
 
-        return csvData.filter(d => {
+        const validData = csvData.filter(d => {
             const xValue = d[xAxisInfo.columnName];
             // Relaxed validation: allow any defined value that isn't null/undefined/empty string
             // We handle specific type checks (like isNaN) in the renderers/scale factory if needed

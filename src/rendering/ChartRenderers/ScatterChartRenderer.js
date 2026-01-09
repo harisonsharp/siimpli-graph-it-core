@@ -24,6 +24,7 @@ import * as d3 from 'd3';
 import { BaseChartRenderer } from './BaseChartRenderer.js';
 import { debugLog, debugWarn } from '../../utils/debug.js';
 import { parseNumber } from '../../utils/dataUtils.js';
+import { SymbolFactory } from '../../utils/SymbolFactory.js';
 
 export class ScatterChartRenderer extends BaseChartRenderer {
     /**
@@ -45,7 +46,7 @@ export class ScatterChartRenderer extends BaseChartRenderer {
     getType() {
         return 'scatter';
     }
-
+    
     /**
      * Render scatter plot
      * @param {d3.Selection} g - D3 group selection
@@ -61,11 +62,39 @@ export class ScatterChartRenderer extends BaseChartRenderer {
     render(g, data, scales, xAxisInfo, yAxisInfo, config, colorScale = null, colorInfo = null, seriesColor = null) {
         this.validateRenderParams(g, data, scales);
         const { xScale, yScale } = scales;
-        const validData = this.filterValidData(data, xAxisInfo, yAxisInfo);
+        let validData = this.filterValidData(data, xAxisInfo, yAxisInfo);
 
         if (validData.length === 0) {
             console.warn('No valid data points for scatter plot');
             return;
+        }
+
+        // Get series configuration for this specific series
+        const currentSeriesConfig = config.series.find(s => {
+            const split = s.yAxis.split('::');
+            return split[0] === yAxisInfo.columnName && (split[1] === undefined || split[1] === yAxisInfo.fileName);
+        });
+
+        // Unique Filter / Symbol Encoding Logic
+        let symbolMap = null;
+        let filterColumn = null;
+
+        if (currentSeriesConfig && currentSeriesConfig.filter && currentSeriesConfig.filterType === 'unique' && currentSeriesConfig.filterColumn) {
+            const splitFilter = currentSeriesConfig.filterColumn.split('::');
+            filterColumn = splitFilter[0]; // Assuming columnName is first part
+
+            // Filter out empty values if requested
+            if (currentSeriesConfig.excludeEmptyValues) {
+                validData = validData.filter(d => {
+                    const val = d[filterColumn];
+                    return val !== undefined && val !== null && val !== '';
+                });
+            }
+
+            // Generate symbol map from remaining data
+            debugLog('[ScatterChartRenderer.render] validData, filterColumn', validData, filterColumn);
+            const uniqueValues = SymbolFactory.getUniqueValues(validData, filterColumn);
+            symbolMap = SymbolFactory.getSymbolMap(uniqueValues);
         }
 
         // Handle both band and linear scales for x-axis
@@ -79,28 +108,42 @@ export class ScatterChartRenderer extends BaseChartRenderer {
                 return xScale(parseNumber(xValue));
             }
         };
-        let finalRadius = config.series.filter(seriesItem => {
-            let seriesItemSplit = seriesItem.yAxis.split('::');
-            let retVal = seriesItemSplit[0] === yAxisInfo.columnName && seriesItemSplit[1] === yAxisInfo.fileName ? true : false;
-            return retVal;
-        })[0].strokeWidth;
-        // Create circles for each data point
+
+        let finalRadius = currentSeriesConfig ? currentSeriesConfig.strokeWidth : this.radius;
+        // Calculate area from radius: Area = pi * r^2
+        // D3 symbol size is area in square pixels
+        const symbolArea = Math.PI * Math.pow(parseFloat(finalRadius || this.radius), 2);
+
+        // Render points
         g.selectAll('.dot')
             .data(validData)
             .enter()
-            .append('circle')
+            .append('path') // Changed from circle to path
             .attr('class', 'dot')
-            .attr('r', finalRadius || this.radius)
-            .attr('cx', getXPosition)
-            .attr('cy', d => yScale(parseNumber(d[yAxisInfo.columnName])))
+            .attr('d', d3.symbol()
+                .type(d => {
+                    if (symbolMap && filterColumn) {
+                        return SymbolFactory.getSymbol(d[filterColumn], symbolMap);
+                    }
+                    return d3.symbolCircle;
+                })
+                .size(symbolArea)
+            )
+            .attr('transform', d => `translate(${getXPosition(d)},${yScale(parseNumber(d[yAxisInfo.columnName]))})`)
             .style('fill', d => this.getPointColor(d, colorScale, colorInfo, config, seriesColor))
             .style('opacity', this.opacity)
             .style('stroke', '#000')
             .style('stroke-width', 0.5)
             .append('title') // Add tooltip
-            .text(d => `${xAxisInfo.columnName}: ${d[xAxisInfo.columnName]}\n${yAxisInfo.columnName}: ${d[yAxisInfo.columnName]}`);
+            .text(d => {
+                let text = `${xAxisInfo.columnName}: ${d[xAxisInfo.columnName]}\n${yAxisInfo.columnName}: ${d[yAxisInfo.columnName]}`;
+                if (filterColumn) {
+                    text += `\n${filterColumn}: ${d[filterColumn]}`;
+                }
+                return text;
+            });
 
-        console.log('Scatter chart rendered successfully', g.selectAll('.dot').data(), g);
+        console.log('Scatter chart rendered successfully', g.selectAll('.dot').data().length);
     }
 
     /**
@@ -137,4 +180,5 @@ export class ScatterChartRenderer extends BaseChartRenderer {
             strokeWidth: 0.5 // Default stroke width for scatter
         });
     }
+
 }

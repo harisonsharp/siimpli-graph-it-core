@@ -19,6 +19,8 @@ export * from './utils/parseCSV.js';
 export * from './utils/statisticsUtils.js';
 export * from './utils/watermarkUtils.js';
 export * from './utils/batchConfigAdapter.js';
+export * from './utils/symbolFactory.js';
+export * from './utils/MathUtils.js';
 
 // Services
 export * from './services/GraphService.js';
@@ -39,6 +41,8 @@ export * from './rendering/ChartRenderers/ScatterChartRenderer.js';
 export * from './rendering/ChartRenderers/LineChartRenderer.js';
 export * from './rendering/ChartRenderers/BarChartRenderer.js';
 export * from './rendering/ChartRenderers/HistogramRenderer.js';
+export * from './rendering/DataTableRenderer.js';
+export * from './rendering/LegendRenderer.js';
 
 // Core
 export * from './core/services/BatchProcessingService.js';

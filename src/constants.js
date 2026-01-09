@@ -35,7 +35,7 @@ export const GRAPH_CONFIG = {
 export const WATERMARK_CONFIG = {
     seed: 'a4b7e1c8-d9f2-4g5h-6i7j-8k9l0m1n2o3p',
     tilePxSize: 64,
-    shadeDifference: 10,
+    shadeDifference: 2,
     baseColor: { r: 255, g: 255, b: 255 },
 };
 
@@ -63,6 +63,10 @@ export const DEFAULT_GRAPH_CONFIG = {
     graphType: 'scatter', // Kept for backwards compatibility, but series-specific type is preferred
     barMode: 'group', // 'group' or 'stack'
     title: '',
+    dualUnits: false,
+    scaleFactor: 1,
+    fromUnits: '',
+    toUnits: '',
     xAxisLabel: '',
     yAxisLabel: '',
     yAxisLabel2: '',

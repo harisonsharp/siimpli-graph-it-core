@@ -33,7 +33,7 @@ export const groupSeriesByAxis = (series) => {
     }
 
     const primary = series.filter(s => s.axisAssignment !== 'secondary');
-    const secondary = series.filter(s => s.axisAssignment === 'secondary');
+    const secondary = series.filter(s => s.axisAssignment === 'secondary') || ['dualUnits'];
 
     return { primary, secondary };
 };
@@ -158,7 +158,7 @@ export const resolveTypeConflict = (allSeries, conflict) => {
     // Create updated series array
     const updatedSeries = allSeries.map((series, index) => {
         const conflicting = conflictingSeries.find(c => c.index === index && series.axisAssignment !== 'secondary');
-        
+
         if (conflicting) {
             changes.push({
                 seriesIndex: index,
