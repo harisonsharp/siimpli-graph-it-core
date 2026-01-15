@@ -1,3 +1,19 @@
+/**
+ * @fileoverview Renders data tables (hover and static) for graph visualization interaction.
+ * Manages the interaction layer, displaying data values at cursor position or selected points.
+ *
+ * @author Harison Sharp
+ * @since 0.3.0
+ *
+ * @module Data Table Renderer
+ * @type {Renderer}
+ *
+ * @requires d3
+ * @requires ScaleFactory
+ * @requires CanvasSizer
+ *
+ * @exports DataTableRenderer
+ */
 import * as d3 from 'd3';
 import { ScaleFactory } from './ScaleFactory';
 import { debugLog } from '../utils/debug.js';
@@ -54,8 +70,8 @@ export class DataTableRenderer {
         const sortedData = [...validData].sort((a, b) => +a[xCol] - +b[xCol]);
         const bisectDate = d3.bisector(d => +d[xCol]).left;
 
-        // 3. Render Static Table
-        if (showStaticTable) {
+        // 3. Render Static Table (skip if hideStaticTableVisual is set, e.g., when unified table handles display)
+        if (showStaticTable && !globalSettings.hideStaticTableVisual) {
             this._renderStaticTable(
                 svg,
                 sortedData,

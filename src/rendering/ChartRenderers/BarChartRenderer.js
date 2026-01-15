@@ -22,6 +22,7 @@
 
 import * as d3 from 'd3';
 import { BaseChartRenderer } from './BaseChartRenderer.js';
+import { debugLog, debugWarn } from '../../utils/debug.js';
 
 export class BarChartRenderer extends BaseChartRenderer {
     /**

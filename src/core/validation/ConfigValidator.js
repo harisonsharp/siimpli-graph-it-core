@@ -17,6 +17,7 @@
  */
 
 import { ValidationError } from './DataValidator.js';
+import { debugLog, debugWarn } from '../../utils/debug.js';
 
 export class ConfigValidator {
     static VALID_GRAPH_TYPES = ['scatter', 'line', 'histogram', 'bar'];

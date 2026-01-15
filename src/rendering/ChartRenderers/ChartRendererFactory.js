@@ -21,6 +21,7 @@ import { ScatterChartRenderer } from './ScatterChartRenderer.js';
 import { LineChartRenderer } from './LineChartRenderer.js';
 import { BarChartRenderer } from './BarChartRenderer.js';
 import { HistogramRenderer } from './HistogramRenderer.js';
+import { debugLog, debugWarn } from '../../utils/debug.js';
 
 export class ChartRendererFactory {
     /**

@@ -12,17 +12,17 @@
  *  @param {string} filename - Graph filename with embedded coordinate information
  *  @returns {Object|null} Parsed axis data or null if parsing fails
  *
- * @exports FilenameParsingService
+ * @exports FileNameParsingService
  *
  * @example
- * const parsed = FilenameParsingService.parseGraphFilename("240915_w800h600_xTimes80,10_yAmplitudes60,15.png");
+ * const parsed = FileNameParsingService.parseGraphFilename("240915_w800h600_xTimes80,10_yAmplitudes60,15.png");
  * // Returns: {date: "240915", x: {name: "Time", zero: 80, ppu: 10}, y: {name: "Amplitude", zero: 60, ppu: 15}}
  *
  * @relatedFiles FileNameDecoder.jsx, CoordinateService.js - Filename parsing for coordinate system extraction
  */
 import { debugLog, debugWarn } from '../utils/debug.js';
 
-export class FilenameParsingService {
+export class FileNameParsingService {
     static parseGraphFilename(filename) {
         if (!filename || typeof filename !== 'string') {
             return null;

@@ -2,10 +2,16 @@
  * @fileoverview Factory for generating D3 symbol mappings for categorical data.
  * Handles dynamic assignment of shapes to unique values and consistent rendering.
  *
+ * @author Harison Sharp
+ * @since 0.3.0
+ *
  * @module SymbolFactory
- * @requires d3 - Data visualization library
+ * @type {Factory}
+ *
+ * @requires d3
+ *
+ * @exports SymbolFactory
  */
-
 import * as d3 from 'd3';
 import { debugLog } from './debug.js';
 

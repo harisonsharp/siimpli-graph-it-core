@@ -1,3 +1,19 @@
+/**
+ * @fileoverview Service for headless graph generation (no UI).
+ * Listens for backend events and generates graphs automatically for batch operations.
+ *
+ * @author Harison Sharp
+ * @since 0.3.0
+ *
+ * @module Headless Graph Service
+ * @type {Service}
+ *
+ * @requires d3
+ * @requires ExportService
+ * @requires GraphService
+ *
+ * @exports HeadlessGraphService
+ */
 import { listen } from '@tauri-apps/api/event';
 import { invoke } from '@tauri-apps/api/core';
 import { writeFile } from '@tauri-apps/plugin-fs';

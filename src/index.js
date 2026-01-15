@@ -19,7 +19,7 @@ export * from './utils/parseCSV.js';
 export * from './utils/statisticsUtils.js';
 export * from './utils/watermarkUtils.js';
 export * from './utils/batchConfigAdapter.js';
-export * from './utils/symbolFactory.js';
+export * from './utils/SymbolFactory.js';
 export * from './utils/MathUtils.js';
 
 // Services
@@ -32,7 +32,8 @@ export * from './services/CanvasSizer.js';
 export * from './services/SvgPlottingService.js';
 export * from './services/HeadlessGraphService.js';
 export * from './services/FileNameParsingService.js';
-
+export * from './services/ImageExportService.js';
+export * from './services/CanvasSizer.js';
 // Rendering
 export * from './rendering/ScaleFactory.js';
 export * from './rendering/ChartRenderers/ChartRendererFactory.js';
@@ -41,8 +42,13 @@ export * from './rendering/ChartRenderers/ScatterChartRenderer.js';
 export * from './rendering/ChartRenderers/LineChartRenderer.js';
 export * from './rendering/ChartRenderers/BarChartRenderer.js';
 export * from './rendering/ChartRenderers/HistogramRenderer.js';
+export * from './rendering/GraphCompositionRenderer.js';
 export * from './rendering/DataTableRenderer.js';
 export * from './rendering/LegendRenderer.js';
+export * from './rendering/UnifiedTableRenderer.js';
+export * from './rendering/BiasTableRenderer.js';
+export * from './rendering/LogoRenderer.js';
+export * from './rendering/AnnotationRenderer.js';
 
 // Core
 export * from './core/services/BatchProcessingService.js';

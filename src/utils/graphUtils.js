@@ -364,27 +364,6 @@ export const isFunction = (data, xCol, yCol) => {
     return uniqueX.size === xValues.length;
 };
 
-
-export const renderLogo = (svg, logoImage, dimensions) => {
-    if (!logoImage || !logoImage.src) return;
-
-    const { height, margin } = dimensions;
-    const logoTargetWidth = 60;
-    const aspectRatio = (logoImage.naturalHeight && logoImage.naturalWidth)
-        ? logoImage.naturalHeight / logoImage.naturalWidth
-        : 1;
-    const logoHeight = logoTargetWidth * aspectRatio;
-
-    // height in dimensions is already the inner graph height (fullHeight - margins)
-    // We want to place the logo below the graph area
-    const logoX = margin.left - logoTargetWidth - 10;
-    const logoY = margin.top + height + 10;
-
-    svg.append("image")
-        .attr("href", logoImage.src)
-        .attr("x", logoX)
-        .attr("y", logoY)
-        .attr("width", logoTargetWidth)
-        .attr("height", logoHeight)
-        .attr("opacity", 0.8);
-};
+// Re-exported from LogoRenderer.js for backward compatibility
+// @deprecated Import from '../rendering/LogoRenderer.js' directly
+export { renderLogo } from '../rendering/LogoRenderer.js';

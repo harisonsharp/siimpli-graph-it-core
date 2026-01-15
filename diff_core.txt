@@ -1,0 +1,1013 @@
+diff --git a/src/constants.js b/src/constants.js
+index 9eeeb0c..04075a0 100644
+--- a/src/constants.js
++++ b/src/constants.js
+@@ -23,6 +23,8 @@
+  * @relatedFiles ConfigContext.jsx, CurveFittingPanel.jsx - Imported by configuration and UI components
+  */
+ 
++import { debugLog, debugWarn } from './utils/debug.js';
++
+ export const GRAPH_CONFIG = {
+     MARGINS: { top: 60, right: 150, bottom: 120, left: 80 },
+     GRID_SIZE: 200,
+diff --git a/src/core/validation/ConfigValidator.js b/src/core/validation/ConfigValidator.js
+index c0b07bb..f8ec2ab 100644
+--- a/src/core/validation/ConfigValidator.js
++++ b/src/core/validation/ConfigValidator.js
+@@ -17,6 +17,7 @@
+  */
+ 
+ import { ValidationError } from './DataValidator.js';
++import { debugLog, debugWarn } from '../../utils/debug.js';
+ 
+ export class ConfigValidator {
+     static VALID_GRAPH_TYPES = ['scatter', 'line', 'histogram', 'bar'];
+diff --git a/src/core/validation/DataValidator.js b/src/core/validation/DataValidator.js
+index a15e868..1c716fd 100644
+--- a/src/core/validation/DataValidator.js
++++ b/src/core/validation/DataValidator.js
+@@ -16,6 +16,8 @@
+  * DataValidator.validateDataExtents([0, 100]);
+  */
+ 
++import { debugLog, debugWarn } from '../../utils/debug.js';
++
+ export class ValidationError extends Error {
+     constructor(message, field = null) {
+         super(message);
+diff --git a/src/index.js b/src/index.js
+index f19fe69..2b8e040 100644
+--- a/src/index.js
++++ b/src/index.js
+@@ -19,7 +19,7 @@ export * from './utils/parseCSV.js';
+ export * from './utils/statisticsUtils.js';
+ export * from './utils/watermarkUtils.js';
+ export * from './utils/batchConfigAdapter.js';
+-export * from './utils/symbolFactory.js';
++export * from './utils/SymbolFactory.js';
+ export * from './utils/MathUtils.js';
+ 
+ // Services
+@@ -41,8 +41,13 @@ export * from './rendering/ChartRenderers/ScatterChartRenderer.js';
+ export * from './rendering/ChartRenderers/LineChartRenderer.js';
+ export * from './rendering/ChartRenderers/BarChartRenderer.js';
+ export * from './rendering/ChartRenderers/HistogramRenderer.js';
++export * from './rendering/GraphCompositionRenderer.js';
+ export * from './rendering/DataTableRenderer.js';
+ export * from './rendering/LegendRenderer.js';
++export * from './rendering/UnifiedTableRenderer.js';
++export * from './rendering/BiasTableRenderer.js';
++export * from './rendering/LogoRenderer.js';
++export * from './rendering/AnnotationRenderer.js';
+ 
+ // Core
+ export * from './core/services/BatchProcessingService.js';
+diff --git a/src/rendering/ChartRenderers/BarChartRenderer.js b/src/rendering/ChartRenderers/BarChartRenderer.js
+index df2e69e..937d0da 100644
+--- a/src/rendering/ChartRenderers/BarChartRenderer.js
++++ b/src/rendering/ChartRenderers/BarChartRenderer.js
+@@ -22,6 +22,7 @@
+ 
+ import * as d3 from 'd3';
+ import { BaseChartRenderer } from './BaseChartRenderer.js';
++import { debugLog, debugWarn } from '../../utils/debug.js';
+ 
+ export class BarChartRenderer extends BaseChartRenderer {
+     /**
+diff --git a/src/rendering/ChartRenderers/ChartRendererFactory.js b/src/rendering/ChartRenderers/ChartRendererFactory.js
+index 54ca285..7f8d278 100644
+--- a/src/rendering/ChartRenderers/ChartRendererFactory.js
++++ b/src/rendering/ChartRenderers/ChartRendererFactory.js
+@@ -21,6 +21,7 @@ import { ScatterChartRenderer } from './ScatterChartRenderer.js';
+ import { LineChartRenderer } from './LineChartRenderer.js';
+ import { BarChartRenderer } from './BarChartRenderer.js';
+ import { HistogramRenderer } from './HistogramRenderer.js';
++import { debugLog, debugWarn } from '../../utils/debug.js';
+ 
+ export class ChartRendererFactory {
+     /**
+diff --git a/src/rendering/DataTableRenderer.js b/src/rendering/DataTableRenderer.js
+index 55ea014..c72856e 100644
+--- a/src/rendering/DataTableRenderer.js
++++ b/src/rendering/DataTableRenderer.js
+@@ -1,3 +1,19 @@
++/**
++ * @fileoverview Renders data tables (hover and static) for graph visualization interaction.
++ * Manages the interaction layer, displaying data values at cursor position or selected points.
++ *
++ * @author Harison Sharp
++ * @since 0.3.0
++ *
++ * @module Data Table Renderer
++ * @type {Renderer}
++ *
++ * @requires d3
++ * @requires ScaleFactory
++ * @requires CanvasSizer
++ *
++ * @exports DataTableRenderer
++ */
+ import * as d3 from 'd3';
+ import { ScaleFactory } from './ScaleFactory';
+ import { debugLog } from '../utils/debug.js';
+@@ -54,8 +70,8 @@ export class DataTableRenderer {
+         const sortedData = [...validData].sort((a, b) => +a[xCol] - +b[xCol]);
+         const bisectDate = d3.bisector(d => +d[xCol]).left;
+ 
+-        // 3. Render Static Table
+-        if (showStaticTable) {
++        // 3. Render Static Table (skip if hideStaticTableVisual is set, e.g., when unified table handles display)
++        if (showStaticTable && !globalSettings.hideStaticTableVisual) {
+             this._renderStaticTable(
+                 svg,
+                 sortedData,
+diff --git a/src/rendering/LegendRenderer.js b/src/rendering/LegendRenderer.js
+index ce4b594..67b2438 100644
+--- a/src/rendering/LegendRenderer.js
++++ b/src/rendering/LegendRenderer.js
+@@ -1,3 +1,19 @@
++/**
++ * @fileoverview Renderer for graph legends, including series, discrete color, continuous gradient, and contour legends.
++ * Handles symbol generation, text formatting, and layout for various legend types.
++ *
++ * @author Harison Sharp
++ * @since 0.3.0
++ *
++ * @module Legend Renderer
++ * @type {Renderer}
++ *
++ * @requires d3
++ * @requires ScaleFactory
++ * @requires SymbolFactory
++ *
++ * @exports LegendRenderer
++ */
+ import * as d3 from 'd3';
+ import { ScaleFactory } from './ScaleFactory.js';
+ import { SymbolFactory } from '../utils/SymbolFactory.js';
+diff --git a/src/services/FileNameParsingService.js b/src/services/FileNameParsingService.js
+index 9b49ce5..21092dd 100644
+--- a/src/services/FileNameParsingService.js
++++ b/src/services/FileNameParsingService.js
+@@ -22,7 +22,7 @@
+  */
+ import { debugLog, debugWarn } from '../utils/debug.js';
+ 
+-export class FilenameParsingService {
++export class FileNameParsingService {
+     static parseGraphFilename(filename) {
+         if (!filename || typeof filename !== 'string') {
+             return null;
+diff --git a/src/services/GraphService.js b/src/services/GraphService.js
+index 3d59ec8..446ffb8 100644
+--- a/src/services/GraphService.js
++++ b/src/services/GraphService.js
+@@ -3,6 +3,7 @@ import { generateContours } from '../utils/graphUtils.js';
+ import { parseNumber } from '../utils/dataUtils.js';
+ import { ScaleFactory } from '../rendering/ScaleFactory.js';
+ import { ChartRendererFactory } from '../rendering/ChartRenderers/ChartRendererFactory.js';
++import { GraphCompositionRenderer } from '../rendering/GraphCompositionRenderer.js';
+ import { CanvasSizer } from './CanvasSizer.js';
+ import { debugLog, debugWarn } from '../utils/debug.js';
+ /**
+@@ -32,8 +33,11 @@ import { debugLog, debugWarn } from '../utils/debug.js';
+ export class GraphService {
+     constructor(colorSchemes) {
+         this.colorSchemes = colorSchemes;
++        /** @internal Renderer delegate for all D3 DOM operations */
++        this._renderer = new GraphCompositionRenderer(colorSchemes);
+     }
+ 
++
+     createScales(validData, xAxisInfo, seriesInfo, width, height, graphConfig) {
+         // Delegate to ScaleFactory for consistent scale creation
+         return ScaleFactory.createScalesForGraph(
+@@ -53,523 +57,54 @@ export class GraphService {
+         return ScaleFactory.createColorScale(validData, colorInfo, graphConfig.colorScheme);
+     }
+ 
++    /**
++     * @deprecated Use GraphCompositionRenderer.drawDataSeries directly.
++     * Delegates to internal renderer for backward compatibility.
++     */
+     drawDataSeries(g, validData, xScale, yScale, xAxisInfo, seriesInfo, colorScale, colorInfo, graphConfig, seriesColorScale) {
+-        // Check if dual-axis mode
+-        const isDualAxis = yScale && typeof yScale === 'object' && yScale.primary && yScale.secondary;
+-
+-        const graphType = (graphConfig?.graphType || 'scatter').toLowerCase();
+-
+-        if (graphType === 'histogram') {
+-            const scales = { xScale, yScale: isDualAxis ? yScale.primary : yScale };
+-            const renderer = ChartRendererFactory.createRendererSafe('histogram');
+-            renderer.render(
+-                g,
+-                validData,
+-                scales,
+-                xAxisInfo,
+-                null,
+-                graphConfig,
+-                colorScale,
+-                colorInfo,
+-                seriesColorScale
+-            );
+-            return;
+-        }
+-
+-        // Separate series by axis assignment
+-        const primarySeries = seriesInfo.filter(s => s.axisAssignment !== 'secondary');
+-        const secondarySeries = seriesInfo.filter(s => s.axisAssignment === 'secondary');
+-
+-        // Render primary axis series
+-        if (primarySeries.length > 0) {
+-            const primaryYScale = isDualAxis ? yScale.primary : yScale;
+-            this.renderSeriesGroup(
+-                g,
+-                validData,
+-                xScale,
+-                primaryYScale,
+-                xAxisInfo,
+-                primarySeries,
+-                colorScale,
+-                colorInfo,
+-                graphConfig,
+-                seriesColorScale
+-            );
+-        }
+-
+-        // Render secondary axis series
+-        if (isDualAxis && secondarySeries.length > 0) {
+-            this.renderSeriesGroup(
+-                g,
+-                validData,
+-                xScale,
+-                yScale.secondary,
+-                xAxisInfo,
+-                secondarySeries,
+-                colorScale,
+-                colorInfo,
+-                graphConfig,
+-                seriesColorScale
+-            );
+-        }
++        return this._renderer.drawDataSeries(g, validData, xScale, yScale, xAxisInfo, seriesInfo, colorScale, colorInfo, graphConfig, seriesColorScale);
+     }
+ 
+     /**
+-     * Render a group of series on the same axis
+-     * @param {d3.Selection} g - SVG group
+-     * @param {Array} validData - Valid data points
+-     * @param {d3.Scale} xScale - X scale
+-     * @param {d3.Scale} yScale - Y scale for this group
+-     * @param {Object} xAxisInfo - X axis info
+-     * @param {Array} seriesInfo - Series to render
+-     * @param {d3.Scale} colorScale - Color scale
+-     * @param {Object} colorInfo - Color column info
+-     * @param {Object} graphConfig - Graph configuration
+-     * @param {Function} seriesColorScale - Series color scale
++     * @deprecated Use GraphCompositionRenderer.renderSeriesGroup directly.
++     * @internal Delegates to internal renderer.
+      */
+     renderSeriesGroup(g, validData, xScale, yScale, xAxisInfo, seriesInfo, colorScale, colorInfo, graphConfig, seriesColorScale) {
+-        const scales = { xScale, yScale };
+-        const graphType = (graphConfig?.graphType || 'scatter').toLowerCase();
+-
+-        const barSeries = seriesInfo.filter(s => (s.graphType || graphType) === 'bar');
+-        const otherSeries = seriesInfo.filter(s => (s.graphType || graphType) !== 'bar');
+-
+-        // Render bar series (grouped or stacked)
+-        if (barSeries.length > 0) {
+-            const barRenderer = ChartRendererFactory.createRenderer('bar', {
+-                mode: graphConfig.barMode || 'group'
+-            });
+-            barRenderer.render(g, validData, scales, xAxisInfo, barSeries, graphConfig, seriesColorScale);
+-        }
+-
+-        // Render other series types
+-        otherSeries.forEach((series, i) => {
+-            const yAxisInfo = series.yAxisInfo;
+-            // For non-bar charts, filter to only include rows with valid Y values for this specific series
+-            // For non-bar charts, filter to only include rows with valid Y values for this specific series
+-            debugLog(`[GraphService] Series ${i} (${series.graphType}) data_points:`, {
+-                yAxisInfo: yAxisInfo,
+-                validData: validData,
+-            });
+-            const seriesValidData = validData.filter((d, index) => {
+-                if (series.graphType === 'histogram') return true;
+-                // File matching: Only exclude rows when BOTH file context exists AND column is absent
+-                // This preserves column collision protection while supporting joined datasets
+-                const hasFileContext = yAxisInfo.fileName && d._sourceFile;
+-                const isSameFile = !hasFileContext || d._sourceFile === yAxisInfo.fileName;
+-                const columnExistsInRow = d.hasOwnProperty(yAxisInfo.columnName);
+-
+-                // If files don't match, only include if column actually exists in this row
+-                if (hasFileContext && !isSameFile && !columnExistsInRow) {
+-                    return false;
+-                }
+-
+-                const yValue = d[yAxisInfo.columnName];
+-
+-                return yValue !== undefined &&
+-                    yValue !== null &&
+-                    yValue !== '' &&
+-                    !isNaN(parseNumber(yValue));
+-            });
+-
+-            if (seriesValidData.length === 0) {
+-                // Skip this series if no valid data points exist (avoids DataValidator error)
+-                // This allows "partial data" scenarios where other series might have data,
+-                // or where this series is just empty/placeholder.
+-                // Detailed debug for skipped series
+-                if (validData.length > 0) {
+-                    const sampleSize = Math.min(validData.length, 3);
+-                    const samples = validData.slice(0, sampleSize);
+-                    debugLog(`[GraphService] FILTERING DEBUG for Series ${i} (${series.yAxisInfo.columnName}):`);
+-                    debugLog(`[GraphService] yAxisInfo:`, yAxisInfo);
+-                    samples.forEach((d, idx) => {
+-                        const val = d[yAxisInfo.columnName];
+-                        const parsed = parseNumber(val);
+-                        const fileMatch = (!yAxisInfo.fileName || !d._sourceFile || d._sourceFile === yAxisInfo.fileName);
+-                        debugLog(`[GraphService] Sample ${idx}:`, {
+-                            rawVal: val,
+-                            parsed: parsed,
+-                            sourceFile: d._sourceFile,
+-                            targetFile: yAxisInfo.fileName,
+-                            fileMatch: fileMatch,
+-                            colName: yAxisInfo.columnName,
+-                            rowKeys: Object.keys(d)
+-                        });
+-                    });
+-                }
+-                debugLog(`[GraphService] Series ${i} (${series.yAxisInfo.columnName}) has no valid data points. Skipping rendering.`);
+-                return;
+-            }
+-
+-            debugLog(`[GraphService] Series ${i} (${series.graphType}):`, {
+-                totalValidData: validData.length,
+-                seriesValidData: seriesValidData.length,
+-                yAxisColumn: yAxisInfo.columnName
+-            });
+-
+-            const graphType = series.graphType || 'scatter';
+-            const renderer = ChartRendererFactory.createRendererSafe(graphType);
+-            // Use yAxisInfo.columnName for series color mapping
+-            const seriesColor = seriesColorScale ? seriesColorScale(yAxisInfo.columnName) : null;
+-
+-            // Determine if this series should receive color grading
+-            const targetIndex = graphConfig.colorGradingTarget !== undefined ? parseInt(graphConfig.colorGradingTarget) : 0;
+-            const globalIndex = graphConfig.series.findIndex(s => s.yAxis === series.yAxis && s.axisAssignment === series.axisAssignment);
+-
+-            const useColorScale = (globalIndex === targetIndex) ? colorScale : null;
+-            const useColorInfo = (globalIndex === targetIndex) ? colorInfo : null;
+-
+-            // Create a dedicated group for this series to prevent selector collisions
+-            const seriesGroup = g.append('g').attr('class', `series-group-${i}`);
+-
+-            renderer.render(
+-                seriesGroup,
+-                seriesValidData,
+-                scales,
+-                xAxisInfo,
+-                yAxisInfo,
+-                graphConfig,
+-                useColorScale,
+-                useColorInfo,
+-                seriesColor,
+-                series // Pass the full series config object
+-            );
+-        });
++        return this._renderer.renderSeriesGroup(g, validData, xScale, yScale, xAxisInfo, seriesInfo, colorScale, colorInfo, graphConfig, seriesColorScale);
+     }
+ 
++    /**
++     * @deprecated Use GraphCompositionRenderer.drawDataPoints directly.
++     */
+     drawDataPoints(g, validData, xScale, yScale, xAxisInfo, yAxisInfo, colorScale, colorInfo, graphConfig) {
+-        const scales = { xScale, yScale };
+-        const graphType = graphConfig.graphType || 'scatter';
+-
+-        // Use renderer factory to create appropriate renderer
+-        const renderer = ChartRendererFactory.createRendererSafe(graphType);
+-
+-        // For bar charts with single series, use simpler rendering method
+-        if (graphType === 'bar') {
+-            const barRenderer = ChartRendererFactory.createRenderer('bar');
+-            barRenderer.renderSimpleBars(g, validData, scales, xAxisInfo, yAxisInfo, graphConfig, colorScale, colorInfo);
+-        } else {
+-            renderer.render(g, validData, scales, xAxisInfo, yAxisInfo, graphConfig, colorScale, colorInfo);
+-        }
++        return this._renderer.drawDataPoints(g, validData, xScale, yScale, xAxisInfo, yAxisInfo, colorScale, colorInfo, graphConfig);
+     }
+ 
+     // Chart rendering methods have been moved to dedicated renderer classes
+     // See: rendering/ChartRenderers/ for scatter, line, bar, and histogram renderers
+ 
++    /**
++     * @deprecated Use GraphCompositionRenderer.drawContours directly.
++     */
+     drawContours(g, svg, validData, contourInfo, xAxisInfo, yAxisInfo, xScale, yScale, globalSettings) {
+-        const contourData = validData.filter(d =>
+-            d[contourInfo.columnName] !== undefined &&
+-            !isNaN(+d[contourInfo.columnName])
+-        );
+-
+-        if (contourData.length === 0) return;
+-
+-        const { contours, thresholds } = generateContours(
+-            contourData,
+-            xAxisInfo.columnName,
+-            yAxisInfo.columnName,
+-            contourInfo.columnName,
+-            xScale,
+-            yScale
+-        );
+-
+-        const contourGroup = g.append("g").attr("class", "contours");
+-        const contourColorScale = d3.scaleSequential(d3.interpolateViridis)
+-            .domain([0, thresholds.length - 1]);
+-
+-        contours.forEach((contour, i) => {
+-            const contourPath = d3.geoPath();
+-            contourGroup.append("path")
+-                .datum(contour)
+-                .attr("d", contourPath)
+-                .attr("fill", "none")
+-                .attr("stroke", contourColorScale(i))
+-                .attr("stroke-width", 1.5)
+-                .attr("stroke-opacity", 0.7);
+-        });
+-
+-        return {
+-            thresholds,
+-            colorScale: contourColorScale,
+-            contourInfo
+-        };
++        return this._renderer.drawContours(g, svg, validData, contourInfo, xAxisInfo, yAxisInfo, xScale, yScale, globalSettings);
+     }
+ 
++    /**
++     * @deprecated Use GraphCompositionRenderer.drawCurveFits directly.
++     */
+     drawCurveFits(g, curveFits, xScale, yScale, width, seriesInfo = [], axisInfo = {}, dimensions = {}) {
+-        // Check if dual-axis mode (yScale is {primary, secondary})
+-        const isDualAxis = yScale && typeof yScale === 'object' && yScale.primary && yScale.secondary;
+-
+-        // If yScale is an array, find the correct one by matching series yAxis column name
+-        const isMultiYScale = Array.isArray(yScale);
+-        // Collect equation items to render in a single, compact panel (reduces clutter)
+-        const equationItems = [];
+-        curveFits.forEach((curveFit, index) => {
+-            if (curveFit.enabled && curveFit.result && curveFit.result.curvePoints) {
+-                let thisYScale = isDualAxis ? yScale.primary : yScale;
+-                let seriesLabel = '';
+-
+-                // Determine which Y scale to use based on series axis assignment
+-                if (seriesInfo.length > 0) {
+-                    const seriesIndex = curveFit.seriesIndex ?? 0;
+-                    const targetSeries = seriesInfo[seriesIndex];
+-                    const targetCol = targetSeries?.yAxisInfo?.columnName;
+-
+-                    if (targetCol) {
+-                        seriesLabel = ` (Series: ${targetCol})`;
+-
+-                        // Check if this series is assigned to secondary axis
+-                        if (isDualAxis && targetSeries?.axisAssignment === 'secondary') {
+-                            thisYScale = yScale.secondary;
+-                        }
+-                    }
+-                }
+-
+-                if (isMultiYScale && !isDualAxis && seriesInfo.length > 0) {
+-                    const seriesIndex = curveFit.seriesIndex ?? 0;
+-                    const targetCol = seriesInfo[seriesIndex]?.yAxisInfo?.columnName;
+-                    // Find the yScale whose domain matches the series' yAxis column
+-                    // Assume yScale[i] corresponds to seriesInfo[i]
+-                    if (targetCol) {
+-                        // Try to find the matching yScale by domain
+-                        const foundIdx = seriesInfo.findIndex(s => s.yAxisInfo?.columnName === targetCol);
+-                        if (foundIdx !== -1 && yScale[foundIdx]) {
+-                            thisYScale = yScale[foundIdx];
+-                        }
+-                    }
+-                }
+-                // If xScale is a band/ordinal scale (bars), create a continuous linear scale
+-                // so curve fits (which are continuous) render correctly aligned with scatter points.
+-                let effectiveXScale = xScale;
+-                const isBandScale = typeof xScale.bandwidth === 'function';
+-                if (isBandScale) {
+-                    // Determine numeric domain from curve points if possible, otherwise fall back to xScale.domain().
+-                    const numericXs = curveFit.result.curvePoints.map(p => +p.x).filter(v => !isNaN(v));
+-                    const domainFromPoints = numericXs.length > 0 ? [Math.min(...numericXs), Math.max(...numericXs)] : null;
+-                    // If xScale.domain() is categorical (array of categories), we attempt to coerce if they are numbers.
+-                    const xDomain = (xScale.domain && xScale.domain()) || [];
+-                    const numericDomain = xDomain.map(d => +d).filter(v => !isNaN(v));
+-                    const domainToUse = domainFromPoints || (numericDomain.length > 0 ? [Math.min(...numericDomain), Math.max(...numericDomain)] : null);
+-                    if (domainToUse) {
+-                        // Map to the centers of the first and last category bands so the line aligns with category centers
+-                        let rangeStart = xScale.range ? xScale.range()[0] : 0;
+-                        let rangeEnd = xScale.range ? xScale.range()[1] : 0;
+-                        let firstCenter = null;
+-                        let lastCenter = null;
+-                        if (xDomain.length > 0 && typeof xScale.bandwidth === 'function') {
+-                            try {
+-                                firstCenter = xScale(xDomain[0]) + xScale.bandwidth() / 2;
+-                                lastCenter = xScale(xDomain[xDomain.length - 1]) + xScale.bandwidth() / 2;
+-                                // Use centers as the mapping range
+-                                rangeStart = firstCenter;
+-                                rangeEnd = lastCenter;
+-                                debugLog(`Band scale centers for curve fit: first=${firstCenter}, last=${lastCenter}`);
+-                            } catch (e) {
+-                                debugWarn('Could not compute band centers for effectiveXScale, falling back to range()', e);
+-                            }
+-                        }
+-
+-                        effectiveXScale = d3.scaleLinear()
+-                            .domain(domainToUse)
+-                            .range([rangeStart, rangeEnd]);
+-                        debugLog(`Created linear effectiveXScale for curve fits with domain:`, domainToUse, "and range:", [rangeStart, rangeEnd]);
+-                    } else {
+-                        // Fallback: map using index positions across the band domain; try to use centers if available
+-                        let rangeStart = xScale.range ? xScale.range()[0] : 0;
+-                        let rangeEnd = xScale.range ? xScale.range()[1] : curveFit.result.curvePoints.length - 1;
+-                        if (xDomain.length > 0 && typeof xScale.bandwidth === 'function') {
+-                            try {
+-                                rangeStart = xScale(xDomain[0]) + xScale.bandwidth() / 2;
+-                                rangeEnd = xScale(xDomain[xDomain.length - 1]) + xScale.bandwidth() / 2;
+-                            } catch (e) {
+-                                // ignore and use default range
+-                            }
+-                        }
+-                        effectiveXScale = d3.scaleLinear()
+-                            .domain([0, curveFit.result.curvePoints.length - 1])
+-                            .range([rangeStart, rangeEnd]);
+-                        debugWarn('Could not derive numeric x domain for band scale; using index-based linear mapping for curve fit.');
+-                    }
+-                }
+-
+-                const line = d3.line()
+-                    .curve(d3.curveBasis) // Apply smoothing to the line
+-                    .x(d => {
+-                        const xValue = effectiveXScale(d.x);
+-                        if (isNaN(xValue)) {
+-                            debugWarn(`Invalid x value for curve fit ${index}:`, d.x);
+-                        }
+-                        return xValue;
+-                    })
+-                    .y(d => {
+-                        const yValue = thisYScale(d.y);
+-                        if (isNaN(yValue)) {
+-                            debugWarn(`Invalid y value for curve fit ${index}:`, d.y);
+-                        }
+-                        return yValue;
+-                    });
+-
+-                const validPoints = curveFit.result.curvePoints.filter((d, i) => {
+-                    const xNum = +d.x;
+-                    const xValid = !isNaN(effectiveXScale(xNum));
+-                    const yValid = !isNaN(thisYScale(d.y));
+-                    return xValid && yValid;
+-                });
+-
+-                if (validPoints.length === 0) {
+-                    debugWarn(`No valid points for curve fit ${index}. Skipping rendering.`);
+-                    return;
+-                }
+-
+-                g.append("path")
+-                    .datum(validPoints)
+-                    .attr("fill", "none")
+-                    .attr("stroke", curveFit.color)
+-                    .attr("stroke-width", 3)
+-                    .attr("stroke-dasharray", index === 0 ? "none" : "5,5")
+-                    .attr("d", line);
+-
+-                if (curveFit.result.equation) {
+-                    // Store the equation text and metadata to render after all curves are drawn
+-                    equationItems.push({
+-                        text: curveFit.result.equation,
+-                        r2: curveFit.result.rSquared?.toFixed?.(4) ?? '',
+-                        color: curveFit.color,
+-                        seriesLabel
+-                    });
+-                }
+-
+-                // Detailed logging to help debug alignment issues
+-                try {
+-                    const sampleXs = curveFit.result.curvePoints.slice(0, 5).map(p => p.x);
+-                    debugLog(`CurveFit ${index} sample raw x values:`, sampleXs);
+-                    if (isBandScale) {
+-                        debugLog(`Original xScale domain (categorical):`, xScale.domain());
+-                        debugLog(`effectiveXScale domain/range:`, effectiveXScale.domain ? effectiveXScale.domain() : null, effectiveXScale.range ? effectiveXScale.range() : null);
+-                    } else {
+-                        debugLog(`Using provided xScale with domain/range:`, xScale.domain(), xScale.range());
+-                    }
+-                } catch (e) {
+-                    debugWarn('Error logging scale info for curve fit', e);
+-                }
+-
+-                debugLog(`Curve Fit ${index} Points:`, curveFit.result.curvePoints);
+-                debugLog(`xScale Domain:`, xScale.domain());
+-                debugLog(`yScale Domain:`, thisYScale.domain());
+-            }
+-        });
+-
+-        return { legendItems: equationItems };
++        return this._renderer.drawCurveFits(g, curveFits, xScale, yScale, width, seriesInfo, axisInfo, dimensions);
+     }
+ 
++    /**
++     * @deprecated Use GraphCompositionRenderer.renderCurveFitLegend directly.
++     */
+     renderCurveFitLegend(svgSelection, legendItems = [], axisInfo = {}, dimensions = {}, fallbackWidth = 0) {
+-        if (!svgSelection || typeof svgSelection.append !== 'function' || !legendItems.length) {
+-            return;
+-        }
+-
+-        try {
+-            const svgEl = svgSelection.node ? svgSelection.node() : null;
+-            if (!svgEl) {
+-                return;
+-            }
+-
+-            const svgSel = svgSelection;
+-            const padding = 8;
+-            const swatchSize = 10;
+-            const textGap = 6;
+-            const lineHeight = Math.max(swatchSize, 16) + 6;
+-            const headerHeight = 20;
+-            const ctx = document.createElement('canvas').getContext('2d');
+-            ctx.font = '12px sans-serif';
+-            const maxTextWidth = legendItems.reduce((max, it, i) => {
+-                const lbl = `Fit ${i + 1}${it.seriesLabel}: ${it.text} (R²=${it.r2})`;
+-                return Math.max(max, ctx.measureText(lbl).width);
+-            }, 0);
+-            const legendWidth = Math.ceil(maxTextWidth + padding * 2 + swatchSize + textGap);
+-            const legendHeight = headerHeight + (legendItems.length * lineHeight) + padding * 2;
+-
+-            const currentHeight = svgEl.viewBox && svgEl.viewBox.baseVal && svgEl.viewBox.baseVal.height ? svgEl.viewBox.baseVal.height : svgEl.getAttribute('height');
+-            let numericHeight = Number(currentHeight) || 0;
+-            if (!numericHeight) {
+-                try { numericHeight = svgEl.getBoundingClientRect().height; } catch (e) { numericHeight = 0; }
+-            }
+-
+-            if (numericHeight && legendHeight + 10 > numericHeight) {
+-                const newHeight = Math.ceil(legendHeight + 10);
+-                try {
+-                    svgSel.attr('height', newHeight);
+-                    numericHeight = newHeight;
+-                } catch (e) {
+-                    // ignore if cannot set
+-                }
+-            }
+-
+-            const svgWidth = svgEl.viewBox && svgEl.viewBox.baseVal && svgEl.viewBox.baseVal.width ? svgEl.viewBox.baseVal.width : svgEl.getAttribute('width');
+-            let numericWidth = Number(svgWidth) || 0;
+-            if (!numericWidth) {
+-                try { numericWidth = svgEl.getBoundingClientRect().width; } catch (e) { numericWidth = fallbackWidth; }
+-            }
+-
+-            const legendX = Math.max(10, (numericWidth - legendWidth) / 2);
+-            const marginBottom = (dimensions.margin && dimensions.margin.bottom) || 40;
+-            const axisBaseline = (axisInfo && typeof axisInfo.xAxisY === 'number') ? axisInfo.xAxisY : (numericHeight - marginBottom);
+-            const legendY = axisBaseline + ((axisInfo && axisInfo.xAxisLabelOffset) || 50) + 8;
+-
+-            if (numericHeight && (legendY + legendHeight + 8) > numericHeight) {
+-                const newHeight = Math.ceil(legendY + legendHeight + 12);
+-                try { svgSel.attr('height', newHeight); numericHeight = newHeight; } catch (e) { /* ignore */ }
+-            }
+-
+-            const legendGroup = svgSel.append('g').attr('class', 'curve-fit-legend');
+-
+-            legendGroup.append('rect')
+-                .attr('x', legendX)
+-                .attr('y', legendY)
+-                .attr('width', legendWidth)
+-                .attr('height', legendHeight)
+-                .attr('rx', 6)
+-                .attr('ry', 6)
+-                .attr('fill', '#ffffff')
+-                .attr('fill-opacity', 0.95)
+-                .attr('stroke', '#ccc')
+-                .attr('stroke-width', 1);
+-
+-            legendGroup.append('text')
+-                .attr('x', legendX + padding)
+-                .attr('y', legendY + padding + headerHeight / 1.5)
+-                .attr('font-weight', 600)
+-                .attr('font-size', 12)
+-                .attr('font-family', 'sans-serif')
+-                .text('Curve Fit Legend')
+-                .attr('fill', '#222');
+-
+-            legendItems.forEach((it, i) => {
+-                const itemY = legendY + padding + headerHeight + (i * lineHeight) + 6;
+-
+-                legendGroup.append('rect')
+-                    .attr('x', legendX + padding)
+-                    .attr('y', itemY - swatchSize + 2)
+-                    .attr('width', swatchSize)
+-                    .attr('height', swatchSize)
+-                    .attr('fill', it.color || '#000')
+-                    .attr('rx', 2)
+-                    .attr('ry', 2);
+-
+-                const fullLbl = `Fit ${i + 1}${it.seriesLabel}: ${it.text} (R²=${it.r2})`;
+-                const textEl = legendGroup.append('text')
+-                    .attr('x', legendX + padding + swatchSize + textGap)
+-                    .attr('y', itemY)
+-                    .attr('font-size', 12)
+-                    .attr('font-family', 'sans-serif')
+-                    .attr('fill', '#111')
+-                    .text(fullLbl);
+-
+-                textEl.append('title').text(fullLbl);
+-            });
+-        } catch (e) {
+-            debugWarn('Failed to render curve fit legend', e);
+-        }
++        return this._renderer.renderCurveFitLegend(svgSelection, legendItems, axisInfo, dimensions, fallbackWidth);
+     }
+ 
++
+     /**
+      * Calculate combined extents for all rendered series
+      * Used for dynamic canvas sizing via CanvasSizer
+diff --git a/src/services/HeadlessGraphService.js b/src/services/HeadlessGraphService.js
+index 01112db..c7bfa20 100644
+--- a/src/services/HeadlessGraphService.js
++++ b/src/services/HeadlessGraphService.js
+@@ -1,3 +1,19 @@
++/**
++ * @fileoverview Service for headless graph generation (no UI).
++ * Listens for backend events and generates graphs automatically for batch operations.
++ *
++ * @author Harison Sharp
++ * @since 0.3.0
++ *
++ * @module Headless Graph Service
++ * @type {Service}
++ *
++ * @requires d3
++ * @requires ExportService
++ * @requires GraphService
++ *
++ * @exports HeadlessGraphService
++ */
+ import { listen } from '@tauri-apps/api/event';
+ import { invoke } from '@tauri-apps/api/core';
+ import { writeFile } from '@tauri-apps/plugin-fs';
+diff --git a/src/services/SvgPlottingService.js b/src/services/SvgPlottingService.js
+index 770de02..2a6bd79 100644
+--- a/src/services/SvgPlottingService.js
++++ b/src/services/SvgPlottingService.js
+@@ -6,155 +6,43 @@
+  *
+  * @author Harison Sharp
+  * @since 0.2.0
++ * @deprecated Use AnnotationRenderer from rendering/AnnotationRenderer.js instead.
+  * @class SvgPlottingService
+  *
+  * @description Utility service providing static methods for creating and manipulating SVG elements
+  * within the data visualization context. Handles point plotting with crosshairs, labels,
+  * and dual-axis support for mathematical analysis workflows.
+  *
+- * @requires Native SVG DOM API - Document.createElementNS for SVG element creation
++ * @requires ../rendering/AnnotationRenderer.js - Canonical implementation
+  *
+  * @exports SvgPlottingService - Static class with plotting utility methods
+  *
+  * @example
+- * SvgPlottingService.plotPoint(svgElement, pixels, userInput, parsedData);
+- * SvgPlottingService.clearSvg(svgElement);
++ * // DEPRECATED: Use AnnotationRenderer instead
++ * import { AnnotationRenderer } from '@siimpl/graph-it-core';
++ * AnnotationRenderer.plotPoint(svgElement, pixels, userInput, parsedData);
+  *
+- * @relatedFiles usePlotting.js, CoordinateService.js, PlotControlsCard.jsx
++ * @relatedFiles AnnotationRenderer.js, usePlotting.js, CoordinateService.js
+  */
+ 
++import { AnnotationRenderer } from '../rendering/AnnotationRenderer.js';
++
++/**
++ * @deprecated Use AnnotationRenderer directly.
++ */
+ export class SvgPlottingService {
++    /** @deprecated Use AnnotationRenderer.clearSvg */
+     static clearSvg(svgElement) {
+-        while (svgElement.firstChild) {
+-            svgElement.removeChild(svgElement.firstChild);
+-        }
++        return AnnotationRenderer.clearSvg(svgElement);
+     }
+ 
++    /** @deprecated Use AnnotationRenderer.createSvgElement */
+     static createSvgElement(type, attributes = {}) {
+-        const element = document.createElementNS('http://www.w3.org/2000/svg', type);
+-        Object.entries(attributes).forEach(([key, value]) => {
+-            element.setAttribute(key, value);
+-        });
+-        return element;
++        return AnnotationRenderer.createSvgElement(type, attributes);
+     }
+ 
++    /** @deprecated Use AnnotationRenderer.plotPoint */
+     static plotPoint(svgElement, pixels, userInput, parsedData) {
+-        this.clearSvg(svgElement);
+-
+-        const g = this.createSvgElement('g');
+-        const crosshairSize = 15;
+-
+-        // Plot primary point
+-        const circle = this.createSvgElement('circle', {
+-            cx: pixels.x,
+-            cy: pixels.y,
+-            r: '8',
+-            fill: '#ff0000',
+-            stroke: '#ffffff',
+-            'stroke-width': '3'
+-        });
+-
+-        // Add crosshair
+-        const hLine = this.createSvgElement('line', {
+-            x1: pixels.x - crosshairSize,
+-            x2: pixels.x + crosshairSize,
+-            y1: pixels.y,
+-            y2: pixels.y,
+-            stroke: '#ff0000',
+-            'stroke-width': '2',
+-            'stroke-dasharray': '5,5'
+-        });
+-
+-        const vLine = this.createSvgElement('line', {
+-            x1: pixels.x,
+-            x2: pixels.x,
+-            y1: pixels.y - crosshairSize,
+-            y2: pixels.y + crosshairSize,
+-            stroke: '#ff0000',
+-            'stroke-width': '2',
+-            'stroke-dasharray': '5,5'
+-        });
+-
+-        // Add label
+-        const labelText = `(${userInput.x}, ${userInput.y})`;
+-        const labelX = pixels.x + 15;
+-        const labelY = pixels.y - 15;
+-
+-        const labelBg = this.createSvgElement('rect', {
+-            x: labelX - 5,
+-            y: labelY - 15,
+-            width: Math.max(100, labelText.length * 8 + 10),
+-            height: 20,
+-            fill: 'white',
+-            'fill-opacity': '0.9',
+-            rx: '3'
+-        });
+-
+-        const label = this.createSvgElement('text', {
+-            x: labelX,
+-            y: labelY,
+-            fill: '#ff0000',
+-            'font-size': '14',
+-            'font-weight': 'bold',
+-            'font-family': 'sans-serif'
+-        });
+-        label.textContent = labelText;
+-
+-        // Append elements
+-        g.appendChild(circle);
+-        g.appendChild(hLine);
+-        g.appendChild(vLine);
+-        g.appendChild(labelBg);
+-        g.appendChild(label);
+-
+-        // Handle y2 point if applicable
+-        if (pixels.y2 && parsedData.y2) {
+-            const circle2 = this.createSvgElement('circle', {
+-                cx: pixels.x,
+-                cy: pixels.y2,
+-                r: '8',
+-                fill: '#e74c3c',
+-                stroke: '#ffffff',
+-                'stroke-width': '3'
+-            });
+-
+-            const hLine2 = this.createSvgElement('line', {
+-                x1: pixels.x - crosshairSize,
+-                x2: pixels.x + crosshairSize,
+-                y1: pixels.y2,
+-                y2: pixels.y2,
+-                stroke: '#e74c3c',
+-                'stroke-width': '2',
+-                'stroke-dasharray': '5,5'
+-            });
+-
+-            const label2Text = `Y2: ${userInput.y2}`;
+-            const label2Bg = this.createSvgElement('rect', {
+-                x: labelX - 5,
+-                y: pixels.y2 + 5,
+-                width: Math.max(80, label2Text.length * 8 + 10),
+-                height: 20,
+-                fill: 'white',
+-                'fill-opacity': '0.9',
+-                rx: '3'
+-            });
+-
+-            const label2 = this.createSvgElement('text', {
+-                x: labelX,
+-                y: pixels.y2 + 20,
+-                fill: '#e74c3c',
+-                'font-size': '14',
+-                'font-weight': 'bold',
+-                'font-family': 'sans-serif'
+-            });
+-            label2.textContent = label2Text;
+-
+-            g.appendChild(circle2);
+-            g.appendChild(hLine2);
+-            g.appendChild(label2Bg);
+-            g.appendChild(label2);
+-        }
+-
+-        svgElement.appendChild(g);
++        return AnnotationRenderer.plotPoint(svgElement, pixels, userInput, parsedData);
+     }
+ }
+diff --git a/src/utils/SymbolFactory.js b/src/utils/SymbolFactory.js
+index 7f2941f..3a0e11b 100644
+--- a/src/utils/SymbolFactory.js
++++ b/src/utils/SymbolFactory.js
+@@ -2,10 +2,16 @@
+  * @fileoverview Factory for generating D3 symbol mappings for categorical data.
+  * Handles dynamic assignment of shapes to unique values and consistent rendering.
+  *
++ * @author Harison Sharp
++ * @since 0.3.0
++ *
+  * @module SymbolFactory
+- * @requires d3 - Data visualization library
++ * @type {Factory}
++ *
++ * @requires d3
++ *
++ * @exports SymbolFactory
+  */
+-
+ import * as d3 from 'd3';
+ import { debugLog } from './debug.js';
+ 
+diff --git a/src/utils/axisUtils.js b/src/utils/axisUtils.js
+index b42da3a..e69d7cd 100644
+--- a/src/utils/axisUtils.js
++++ b/src/utils/axisUtils.js
+@@ -215,6 +215,7 @@ const drawXAxis = (g, xScale, xAxisY, xAxisLabelOffset, xAxisLabel, graphType, d
+ 
+ const drawPrimaryYAxis = (g, primaryYScale, yAxisX, primaryColor) => {
+     const axisGenerator = d3.axisLeft(primaryYScale)
++        .tickSizeOuter(0)
+         .tickFormat(d => formatNumber(d, 8)); // 8 digits threshold for Y-axis
+ 
+     const primaryYAxis = g.append('g')
+@@ -238,6 +239,7 @@ const drawPrimaryYAxis = (g, primaryYScale, yAxisX, primaryColor) => {
+ 
+ const drawSecondaryYAxis = (g, secondaryYScale, width, secondaryColor) => {
+     const axisGenerator = d3.axisRight(secondaryYScale)
++        .tickSizeOuter(0)
+         .tickFormat(d => formatNumber(d, 8)); // 8 digits threshold for Y-axis
+ 
+     const secondaryYAxis = g.append('g')
+diff --git a/src/utils/graphUtils.js b/src/utils/graphUtils.js
+index 565dedd..f10b1c4 100644
+--- a/src/utils/graphUtils.js
++++ b/src/utils/graphUtils.js
+@@ -364,27 +364,6 @@ export const isFunction = (data, xCol, yCol) => {
+     return uniqueX.size === xValues.length;
+ };
+ 
+-
+-export const renderLogo = (svg, logoImage, dimensions) => {
+-    if (!logoImage || !logoImage.src) return;
+-
+-    const { height, margin } = dimensions;
+-    const logoTargetWidth = 60;
+-    const aspectRatio = (logoImage.naturalHeight && logoImage.naturalWidth)
+-        ? logoImage.naturalHeight / logoImage.naturalWidth
+-        : 1;
+-    const logoHeight = logoTargetWidth * aspectRatio;
+-
+-    // height in dimensions is already the inner graph height (fullHeight - margins)
+-    // We want to place the logo below the graph area
+-    const logoX = margin.left - logoTargetWidth - 10;
+-    const logoY = margin.top + height + 10;
+-
+-    svg.append("image")
+-        .attr("href", logoImage.src)
+-        .attr("x", logoX)
+-        .attr("y", logoY)
+-        .attr("width", logoTargetWidth)
+-        .attr("height", logoHeight)
+-        .attr("opacity", 0.8);
+-};
++// Re-exported from LogoRenderer.js for backward compatibility
++// @deprecated Import from '../rendering/LogoRenderer.js' directly
++export { renderLogo } from '../rendering/LogoRenderer.js';

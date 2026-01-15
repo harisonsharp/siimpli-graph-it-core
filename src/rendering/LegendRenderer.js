@@ -1,3 +1,19 @@
+/**
+ * @fileoverview Renderer for graph legends, including series, discrete color, continuous gradient, and contour legends.
+ * Handles symbol generation, text formatting, and layout for various legend types.
+ *
+ * @author Harison Sharp
+ * @since 0.3.0
+ *
+ * @module Legend Renderer
+ * @type {Renderer}
+ *
+ * @requires d3
+ * @requires ScaleFactory
+ * @requires SymbolFactory
+ *
+ * @exports LegendRenderer
+ */
 import * as d3 from 'd3';
 import { ScaleFactory } from './ScaleFactory.js';
 import { SymbolFactory } from '../utils/SymbolFactory.js';

@@ -215,6 +215,7 @@ const drawXAxis = (g, xScale, xAxisY, xAxisLabelOffset, xAxisLabel, graphType, d
 
 const drawPrimaryYAxis = (g, primaryYScale, yAxisX, primaryColor) => {
     const axisGenerator = d3.axisLeft(primaryYScale)
+        .tickSizeOuter(0)
         .tickFormat(d => formatNumber(d, 8)); // 8 digits threshold for Y-axis
 
     const primaryYAxis = g.append('g')
@@ -238,6 +239,7 @@ const drawPrimaryYAxis = (g, primaryYScale, yAxisX, primaryColor) => {
 
 const drawSecondaryYAxis = (g, secondaryYScale, width, secondaryColor) => {
     const axisGenerator = d3.axisRight(secondaryYScale)
+        .tickSizeOuter(0)
         .tickFormat(d => formatNumber(d, 8)); // 8 digits threshold for Y-axis
 
     const secondaryYAxis = g.append('g')

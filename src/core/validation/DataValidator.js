@@ -16,6 +16,8 @@
  * DataValidator.validateDataExtents([0, 100]);
  */
 
+import { debugLog, debugWarn } from '../../utils/debug.js';
+
 export class ValidationError extends Error {
     constructor(message, field = null) {
         super(message);
