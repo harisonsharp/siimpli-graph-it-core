@@ -65,11 +65,15 @@ export class BarChartRenderer extends BaseChartRenderer {
         }
 
         const mode = config.barMode || this.mode;
-
+        debugLog(`Rendering bar chart in ${mode} mode`);
         if (mode === 'stack') {
             this.renderStackedBars(g, data, scales, xAxisInfo, seriesInfo, seriesColorScale);
-        } else {
+        } else if (mode === 'group') {
             this.renderGroupedBars(g, data, scales, xAxisInfo, seriesInfo, seriesColorScale);
+        } else if (mode === 'stack-proportional') {
+            this.renderProportionalStackedBars(g, data, scales, xAxisInfo, seriesInfo, seriesColorScale);
+        } else {
+            throw new Error(`Invalid bar mode: ${mode}`);
         }
     }
 
@@ -296,7 +300,10 @@ export class BarChartRenderer extends BaseChartRenderer {
             .keys(seriesInfo.map(s => s.yAxisInfo.columnName));
 
         const stackedData = stack(cleanedData);
-
+        const xGroup = d3.scaleBand()
+            .domain(seriesInfo.map(s => s.yAxisInfo.columnName))
+            .range([0, bandwidth])
+            .padding(this.padding);
         // Render each series as a layer
         // In D3 stack: d[0] = start value (cumulative from previous series)
         //              d[1] = end value (cumulative including this series)
@@ -312,9 +319,11 @@ export class BarChartRenderer extends BaseChartRenderer {
             .enter()
             .append('rect')
             .attr('x', d => {
-                if (typeof xScale.bandwidth === 'function') {
+                if (typeof xGroup.bandwidth === 'function') {
+
                     return xScale(d.data[xAxisInfo.columnName]);
                 }
+
                 // For linear/time scales, center the bar
                 // We need to recalculate bandwidth here or pass it down. 
                 // Re-calculating for safety/simplicity in this context:
@@ -331,7 +340,7 @@ export class BarChartRenderer extends BaseChartRenderer {
                 // Only render if there's a meaningful height (original value wasn't 0/null)
                 return height > 0 ? height : 0;
             })
-            .attr('width', bandwidth)
+            .attr('width', xScale.bandwidth())
             .each(function (d) {
                 // Store reference to parent group to get series name
                 const stackGroup = this.parentNode;
@@ -345,6 +354,158 @@ export class BarChartRenderer extends BaseChartRenderer {
             });
     }
 
+    /**
+    * Render proportionally stacked bar chart
+    * @param {d3.Selection} g - D3 group selection
+    * @param {Array<Object>} data - Data to render
+    * @param {Object} scales - {xScale, yScale}
+    * @param {Object} xAxisInfo - X-axis column info
+    * @param {Array<Object>} seriesInfo - Series configurations
+    * @param {d3.Scale} seriesColorScale - Color scale for series
+    * Description: makes all bars out of 100%, using the max y value as 100% 
+    * 
+    */
+    /**
+     * Render proportionally stacked bar chart (100% Stacked)
+     * @param {d3.Selection} g - D3 group selection
+     * @param {Array<Object>} data - Data to render
+     * @param {Object} scales - {xScale, yScale}
+     * @param {Object} xAxisInfo - X-axis column info
+     * @param {Array<Object>} seriesInfo - Series configurations
+     * @param {d3.Scale} seriesColorScale - Color scale for series
+     */
+    renderProportionalStackedBars(g, data, scales, xAxisInfo, seriesInfo, seriesColorScale) {
+        const { xScale, yScale } = scales;
+
+        debugLog('Rendering proportional stacked bars (100% stacked)');
+
+        // Determine bandwidth (reuse logic from other methods)
+        let bandwidth;
+        if (typeof xScale.bandwidth === 'function') {
+            bandwidth = xScale.bandwidth();
+        } else {
+            // Fallback for non-band scales: calculate min diff
+            const xValues = data.map(d => d[xAxisInfo.columnName]).filter(v => v !== null && v !== undefined);
+            const uniqueX = [...new Set(xValues)].sort((a, b) => a - b);
+            let minDiff = Infinity;
+            if (uniqueX.length > 1) {
+                for (let i = 1; i < uniqueX.length; i++) {
+                    const diff = Math.abs(xScale(uniqueX[i]) - xScale(uniqueX[i - 1]));
+                    if (diff < minDiff) minDiff = diff;
+                }
+            } else {
+                // If only one point or no points, verify x domain span or default
+                // If x scale is linear, bandwidth logic is heuristic
+                minDiff = 100; // Arbitrary default
+                const xRange = xScale.range();
+                if (Math.abs(xRange[1] - xRange[0]) > 0) {
+                    // If we have a range but only 1 point, take a fraction of the range
+                    // or if minDiff is unreasonably large
+                }
+            }
+            // Logic matches renderGroupedBars/StandardStack roughly
+            bandwidth = Math.max(1, minDiff * 0.8);
+        }
+
+        const seriesKeys = seriesInfo.map(s => s.yAxisInfo.columnName);
+
+        // 1. Process data: clean and calculate row totals for normalization
+        const processedData = data.map(d => {
+            const row = { ...d, _originalValues: {} };
+            let rowTotal = 0;
+
+            // First pass: gather values and compute sum
+            seriesKeys.forEach(key => {
+                const rawValue = d[key];
+                const val = (rawValue !== undefined && rawValue !== null && rawValue !== '' && !isNaN(Number(rawValue)))
+                    ? Number(rawValue)
+                    : 0;
+                row._originalValues[key] = val;
+                row[key] = val; // Temporarily store absolute for sum
+                // ABS sum? Usually 100% charts handles positive values. 
+                // Mixed signs in 100% charts are ambiguous. Assuming positive for standard 100% stack.
+                // If specific requirement for mixed signs exists, it needs complex offset logic.
+                // Taking abs for normalization base is a common safety net, or just sum.
+                rowTotal += val;
+            });
+
+            // Second pass: normalize to [0, 1]
+            // If total is 0, all segments are 0
+            seriesKeys.forEach(key => {
+                const val = row[key];
+                row[key] = rowTotal > 0 ? (val / rowTotal) : 0;
+            });
+
+            row._total = rowTotal;
+            return row;
+        });
+
+        // 2. Create local Y-scale for 0-1 domain (100%)
+        // We reuse the existing yScale's range to map 0->1 to the visual height
+        const proportionalYScale = d3.scaleLinear()
+            .domain([0, 1])
+            .range(yScale.range());
+        debugLog('yscale.range()', yScale.range());
+        debugLog('yscale.domain()', yScale.domain());
+        debugLog('yscale', yScale);
+        debugLog('proportionalYScale.range()', proportionalYScale.range());
+        debugLog('proportionalYScale.domain()', proportionalYScale.domain());
+        debugLog('proportionalYScale', proportionalYScale);
+        // 3. Stack the normalized data
+        const stack = d3.stack().keys(seriesKeys);
+        const stackedData = stack(processedData);
+        debugLog('series keys', seriesKeys);
+        debugLog('stacked data', stackedData);
+        debugLog('stack', stack);
+        debugLog('bandwidth', bandwidth);
+        const xGroup = d3.scaleBand()
+            .domain(seriesKeys)
+            .range([xScale.range()[0], xScale.range()[1]])
+            .padding(this.padding);
+        debugLog('xGroup', xGroup);
+        // 4. Render
+        g.selectAll('.stack-proportional')
+            .data(stackedData)
+            .enter()
+            .append('g')
+            .attr('class', 'stack-proportional')
+            .attr('fill', d => seriesColorScale(d.key))
+            .attr('opacity', this.opacity)
+            .selectAll('rect')
+            .data(d => d)
+            .enter()
+            .append('rect')
+            .attr('x', d => {
+                if (typeof xScale.bandwidth === 'function') {
+                    return xScale(d.data[xAxisInfo.columnName]);
+                }
+                const xVal = d.data[xAxisInfo.columnName];
+                return xScale(xVal) - (bandwidth / 2);
+            })
+            .attr('y', d => proportionalYScale(d[1]))
+            .attr('height', d => {
+                const h = proportionalYScale(d[0]) - proportionalYScale(d[1]);
+                return h > 0 ? h : 0;
+            })
+            .attr('width', xGroup.bandwidth())
+            .each(function (d) {
+                // Tooltip logic
+                const stackGroup = this.parentNode;
+                const seriesKey = d3.select(stackGroup).datum().key;
+                const normalizedValue = d[1] - d[0]; // Fraction (0.0 - 1.0)
+                const percentage = (normalizedValue * 100).toFixed(1) + '%';
+
+                // Retrieve original value
+                const originalValue = d.data._originalValues[seriesKey];
+
+                // Only add title if there is a value
+                if (normalizedValue > 0 || originalValue > 0) {
+                    d3.select(this)
+                        .append('title')
+                        .text(`${seriesKey}\n${originalValue} (${percentage})`);
+                }
+            });
+    }
     /**
      * Render single series bar chart (for simple bar charts)
      * @param {d3.Selection} g - D3 group selection

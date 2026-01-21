@@ -311,9 +311,9 @@ export class ScaleFactory {
         let yMin = Infinity;
         let yMax = -Infinity;
 
-        const isStacked = config.barMode === 'stack' && hasBarSeries;
-
-        if (isStacked) {
+        const isStack = config.barMode === 'stack' && hasBarSeries;
+        const isStackProportional = config.barMode === 'stack-proportional' && hasBarSeries;
+        if (isStack) {
             // For stacked bar charts, calculate stacked totals
             const stackKeys = seriesInfo.filter(s => s.graphType === 'bar').map(s => s.yAxisInfo.columnName);
             if (stackKeys.length > 0) {
@@ -321,9 +321,23 @@ export class ScaleFactory {
                 yMin = d3.min(stackedData, series => d3.min(series, d => d[0]));
                 yMax = d3.max(stackedData, series => d3.max(series, d => d[1]));
             }
+        } else if (isStackProportional) {
+            const isOtherSeries = seriesInfo.filter(s => s.graphType !== 'bar').length > 0;
+            if (isOtherSeries) {
+                const stackKeys = seriesInfo.filter(s => s.graphType === 'bar').map(s => s.yAxisInfo.columnName);
+                if (stackKeys.length > 0) {
+                    const stackedData = d3.stack().keys(stackKeys)(data);
+                    yMin = d3.min(stackedData, series => d3.min(series, d => d[0]));
+                    yMax = d3.max(stackedData, series => d3.max(series, d => d[1]));
+                }
+            } else {
+                yMin = 0;
+                yMax = 100;
+            }
+
         }
         debugLog('[createYScale] series info, size, type: ', seriesInfo, seriesInfo.length, typeof seriesInfo);
-        if (!isStacked || config.graphType !== 'bar') {
+        if (!isStack && !isStackProportional || config.graphType !== 'bar') {
             // For non-stacked charts, find min/max across all series
             seriesInfo.forEach(s => {
                 if (s.graphType === 'histogram') {

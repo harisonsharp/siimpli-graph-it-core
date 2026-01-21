@@ -136,7 +136,7 @@ export class LegendRenderer {
      * Draws the main series legend (lines, markers, etc).
      */
 
-    static drawSeriesLegend(svg, validData, seriesInfo, colorScale, graphDimensions, margin, xOffset = 90) {
+    static drawSeriesLegend(graphConfig, svg, validData, seriesInfo, colorScale, graphDimensions, margin, xOffset = 90) {
         const legend = svg.append("g")
             .attr("transform", `translate(${margin.left}, ${margin.top + graphDimensions.height - margin.bottom / 2})`);
         // .attr("transform", `translate(${graphDimensions.width - margin.right + xOffset}, ${margin.top})`);
@@ -144,8 +144,11 @@ export class LegendRenderer {
         debugLog('[LegendRenderer.drawSeriesLegend]', seriesInfo, colorScale, graphDimensions, margin, xOffset);
 
         let currentY = 0;
-
-
+        // if a stacked proportional graph shares an axis with some other series, then we need to disclose the stack is not using the axis, but rather is using the max value as 100%
+        let stackProportionalLegend = false;
+        if (graphConfig.barMode === 'stack-proportional' && seriesInfo.length > 1 && seriesInfo.some(s => s.graphType !== 'bar')) {
+            stackProportionalLegend = true;
+        }
         seriesInfo.forEach((series, i) => {
             debugLog('[LegendRenderer.drawSeriesLegend] validData, series.filterColumn', validData, series.filterColumn);
             let uniqueValues = SymbolFactory.getUniqueValues(validData, series.filterColumn?.split('::')[0]);
@@ -258,7 +261,8 @@ export class LegendRenderer {
                         .attr("y", 12 + (lineIdx * 12)) // 12 baseline roughly centers with 15px icon?
                         .style("font-family", "sans-serif")
                         .style("font-size", "9px")
-                        .text(txt);
+                        // Add (100%) to the last line if stackProportionalLegend is true
+                        .text(txt + (lineIdx === labelArr.length - 1 && stackProportionalLegend ? ' (100%)' : ''));
                 });
 
                 // Advance Y

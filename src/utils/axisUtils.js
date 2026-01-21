@@ -168,11 +168,11 @@ const drawXAxis = (g, xScale, xAxisY, xAxisLabelOffset, xAxisLabel, graphType, d
     //         axisGenerator.tickValues(tickValues);
     //     }
     // }
-
-    const xAxis = g.append('g')
+    let xAxis = g.append('g')
         .attr('class', 'x-axis')
         .attr('transform', `translate(0,${xAxisY})`)
         .call(axisGenerator);
+
 
     xAxis.selectAll('text')
         .style('font-family', 'sans-serif')
@@ -213,14 +213,14 @@ const drawXAxis = (g, xScale, xAxisY, xAxisLabelOffset, xAxisLabel, graphType, d
     return xAxis;
 };
 
-const drawPrimaryYAxis = (g, primaryYScale, yAxisX, primaryColor) => {
+const drawPrimaryYAxis = (g, xScale, primaryYScale, yAxisX, primaryColor) => {
     const axisGenerator = d3.axisLeft(primaryYScale)
         .tickSizeOuter(0)
         .tickFormat(d => formatNumber(d, 8)); // 8 digits threshold for Y-axis
 
     const primaryYAxis = g.append('g')
         .attr('class', 'y-axis y-axis-primary')
-        .attr('transform', `translate(${yAxisX},0)`)
+        .attr('transform', `translate(${typeof xScale.paddingOuter === 'function' ? 0 : yAxisX},0)`)
         .call(axisGenerator);
 
     primaryYAxis.selectAll('text')
@@ -350,8 +350,10 @@ export const drawAxes = (
     // Handle axis intercepts if configured
     let xAxisY = xAxisPosition;
     let yAxisX = yAxisPosition;
-
-    if (config.axisIntercept === 'origin') {
+    if (typeof xScale.paddingOuter === 'function') {
+        yAxisX = xScale.paddingOuter() * xScale.bandwidth() * 2;
+    }
+    else if (config.axisIntercept === 'origin') {
         const xDomain = xScale.domain();
         const yDomain = primaryYScale.domain();
 
@@ -385,7 +387,7 @@ export const drawAxes = (
     const secondaryColor = axisColors?.secondary || '#333';
 
     drawXAxis(g, xScale, xAxisY, 50, xAxisLabel, graphType, data, xAxisInfo);
-    drawPrimaryYAxis(g, primaryYScale, yAxisX, primaryColor);
+    drawPrimaryYAxis(g, xScale, primaryYScale, yAxisX, primaryColor);
     debugLog('[drawAxes] Secondary Y Scale and isDualAxis: ', secondaryYScale, isDualAxis);
     if (isDualAxis && secondaryYScale) {
         drawSecondaryYAxis(g, secondaryYScale, width, secondaryColor);
