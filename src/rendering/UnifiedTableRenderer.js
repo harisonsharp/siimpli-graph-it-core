@@ -444,7 +444,7 @@ export class UnifiedTableRenderer {
             // first value
             const valueFormatted = row.value === 'N/A'
                 ? 'N/A'
-                : (typeof row.value === 'number' ? row.value.toPrecision(4) : row.value);
+                : (typeof row.value === 'number' ? (row.value).toFixed(2) : row.value);
 
             group.append('text')
                 .attr('x', 10 + markerColWidth + nameColWidth)

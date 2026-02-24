@@ -1,5 +1,5 @@
 /**
- * @siimpl/siimpli-graph-it-core
+ * @siimpli/graph-it-core
  * Shared logic and components for SiimpliGraphIt visualization system
  */
 
@@ -54,3 +54,8 @@ export * from './rendering/AnnotationRenderer.js';
 export * from './core/services/BatchProcessingService.js';
 export * from './core/validation/ConfigValidator.js';
 export * from './core/validation/DataValidator.js';
+
+// Components
+export * from './components/GraphController.jsx';
+export * from './hooks/useGraphRenderer.js';
+export * from './hooks/useGraphGeneration.js';
