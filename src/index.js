@@ -21,6 +21,7 @@ export * from './utils/watermarkUtils.js';
 export * from './utils/batchConfigAdapter.js';
 export * from './utils/SymbolFactory.js';
 export * from './utils/MathUtils.js';
+export * from './utils/mathUtils.js';
 
 // Services
 export * from './services/GraphService.js';

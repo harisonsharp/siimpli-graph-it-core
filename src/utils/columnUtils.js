@@ -24,7 +24,8 @@
 
 /**
  * Parse column identifier into column name and optional file name
- * @param {string} columnId - Column identifier, format: "columnName" or "columnName::fileName"
+ * Enhanced with defensive type coercion for edge cases
+ * @param {string|number} columnId - Column identifier, format: "columnName" or "columnName::fileName"
  * @returns {Object} Object with columnName and fileName properties
  *
  * @example
@@ -33,13 +34,17 @@
  *
  * parseColumnId('pressure')
  * // Returns: { columnName: 'pressure', fileName: '' }
+ *
+ * parseColumnId(null)
+ * // Returns: { columnName: '', fileName: '' }
  */
 export const parseColumnId = (columnId) => {
     if (!columnId) return { columnName: '', fileName: '' };
-    
-    const parts = columnId.split('::');
+
+    // Defensive coercion to handle numeric column IDs and other edge cases
+    const parts = String(columnId).split('::');
     return {
-        columnName: parts[0],
+        columnName: parts[0] || '',
         fileName: parts[1] || ''
     };
 };
