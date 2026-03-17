@@ -57,11 +57,10 @@ export * from './core/validation/ConfigValidator.js';
 export * from './core/validation/DataValidator.js';
 export { renderGraph } from './core/renderGraph.js';
 
-// Contexts
-export * from './contexts/ErrorContext.jsx';
-export * from './contexts/ConfigContext.jsx';
-
-// Components
-export * from './components/GraphController.jsx';
-export * from './hooks/useGraphRenderer.js';
-export * from './hooks/useGraphGeneration.js';
+// Note: React-dependent exports are commented out to prevent JSX loading errors in headless environment
+// These are only used by the GUI (@siimpli/graph-it) and not the headless CLI
+// export * from './contexts/ErrorContext.jsx';
+// export * from './contexts/ConfigContext.jsx';
+// export * from './components/GraphController.jsx';
+// export * from './hooks/useGraphRenderer.js';
+// export * from './hooks/useGraphGeneration.js';
