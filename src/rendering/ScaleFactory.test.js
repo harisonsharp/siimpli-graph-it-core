@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { ScaleFactory } from './ScaleFactory';
+import { ScaleFactory } from './ScaleFactory.js';
 import * as d3 from 'd3';
 
 describe('ScaleFactory', () => {

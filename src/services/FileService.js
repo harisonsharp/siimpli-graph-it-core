@@ -23,16 +23,42 @@ import { debugLog, debugWarn } from '../utils/debug.js';
  */
 
 export class FileService {
-    static async loadFiles(files) {
+    /**
+     * Load and parse a list of CSV files.
+     *
+     * @param {Array<{name: string, path?: string}>} files - File descriptors.
+     *   In Tauri, each entry must have a `path` property (absolute FS path).
+     *   In the browser, each entry should be a native `File` object.
+     * @param {{ ioProvider?: import('../io/IOProvider.js').IOProvider }} [options]
+     *   When `ioProvider` is supplied it is used for all file I/O, bypassing both
+     *   the Tauri plugin and the browser FileReader. This is the path taken by the
+     *   headless Node.js pipeline.
+     * @returns {Promise<{newFiles: Array, newData: Array, allColumns: Array}>}
+     */
+    static async loadFiles(files, { ioProvider } = {}) {
         const newFiles = [];
         const newData = [];
         let allColumns = [];
 
-        const isTauri = Boolean(window.__TAURI__ || (window && window.__TAURI_IPC__));
+        const isTauri = typeof window !== 'undefined' && Boolean(window.__TAURI__ || window.__TAURI_IPC__);
 
         await Promise.all(files.map(async file => {
             try {
-                if (isTauri && file.path) {
+                if (ioProvider && file.path) {
+                    // Headless / injected IOProvider path — no browser globals required.
+                    const csvText = await ioProvider.readFile(file.path);
+                    const { headers, data } = parseCSV(csvText);
+
+                    if (!headers || headers.length === 0) throw new Error('No headers found');
+                    newFiles.push({ name: file.name, headers });
+                    const taggedData = data.map(row => ({ ...row, _sourceFile: file.name }));
+                    newData.push(...taggedData);
+                    allColumns = [...allColumns, ...headers.map(h => ({
+                        name: h,
+                        file: file.name,
+                        uniqueId: `${h}::${file.name}`
+                    }))];
+                } else if (isTauri && file.path) {
                     const { readTextFile } = await import('@tauri-apps/plugin-fs');
                     const csvText = await readTextFile(file.path);
                     const { headers, data } = parseCSV(csvText);

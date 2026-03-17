@@ -21,7 +21,7 @@ export * from './utils/watermarkUtils.js';
 export * from './utils/batchConfigAdapter.js';
 export * from './utils/SymbolFactory.js';
 export * from './utils/MathUtils.js';
-export * from './utils/mathUtils.js';
+export * from './utils/mathUtilsHelpers.js';
 
 // Services
 export * from './services/GraphService.js';
@@ -59,8 +59,8 @@ export { renderGraph } from './core/renderGraph.js';
 
 // Note: React-dependent exports are commented out to prevent JSX loading errors in headless environment
 // These are only used by the GUI (@siimpli/graph-it) and not the headless CLI
-// export * from './contexts/ErrorContext.jsx';
-// export * from './contexts/ConfigContext.jsx';
-// export * from './components/GraphController.jsx';
-// export * from './hooks/useGraphRenderer.js';
-// export * from './hooks/useGraphGeneration.js';
+export * from './contexts/ErrorContext.jsx';
+export * from './contexts/ConfigContext.jsx';
+export * from './components/GraphController.jsx';
+export * from './hooks/useGraphRenderer.js';
+export * from './hooks/useGraphGeneration.js';

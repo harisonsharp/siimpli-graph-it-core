@@ -15,7 +15,7 @@
  * @exports DataTableRenderer
  */
 import * as d3 from 'd3';
-import { ScaleFactory } from './ScaleFactory';
+import { ScaleFactory } from './ScaleFactory.js';
 import { debugLog } from '../utils/debug.js';
 import { CanvasSizer } from '../services/CanvasSizer.js';
 /**

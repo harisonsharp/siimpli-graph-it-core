@@ -1,5 +1,5 @@
 import React, { createContext, useContext, useState } from 'react';
-import { DEFAULT_GRAPH_CONFIG, DEFAULT_CURVE_FIT, CURVE_FIT_COLORS, DEFAULT_SERIES_CONFIG } from '@siimpli/graph-it-core';
+import { DEFAULT_GRAPH_CONFIG, DEFAULT_CURVE_FIT, CURVE_FIT_COLORS, DEFAULT_SERIES_CONFIG } from '../constants.js';
 /**
  * @fileoverview React Context provider for centralized application state management and configuration.
  * Manages graph settings, curve fit parameters, and global application state with validation and persistence.
@@ -33,7 +33,7 @@ import { DEFAULT_GRAPH_CONFIG, DEFAULT_CURVE_FIT, CURVE_FIT_COLORS, DEFAULT_SERI
  *
  * @relatedFiles All components - Provides centralized state to entire application
  */
-import { debugLog, debugWarn } from '@siimpli/graph-it-core';
+import { debugLog, debugWarn } from '../utils/debug.js';
 
 const ConfigContext = createContext();
 

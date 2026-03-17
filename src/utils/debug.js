@@ -3,7 +3,7 @@
  * In production builds, DEBUG is false and these blocks can be tree-shaken
  * or stripped by the build tool.
  */
-export const DEBUG = import.meta.env.DEV;
+export const DEBUG = (typeof import.meta !== 'undefined' && import.meta.env?.DEV) ?? (process.env.NODE_ENV !== 'production');
 
 export const LOG_LEVELS = {
     TRACE: 0,

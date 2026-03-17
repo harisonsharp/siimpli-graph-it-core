@@ -35,10 +35,12 @@ export const GRAPH_CONFIG = {
 };
 
 export const WATERMARK_CONFIG = {
-    seed: 'a4b7e1c8-d9f2-4g5h-6i7j-8k9l0m1n2o3p',
-    tilePxSize: 64,
-    shadeDifference: 2,
-    baseColor: { r: 255, g: 255, b: 255 },
+    secret: null,
+    domain: 'siimpli-graph-it',
+    salt: '',
+    version: 1,
+    sampleCount: 8192,
+    detectionThreshold: 0.58,
 };
 
 export const COLOR_SCHEMES = {

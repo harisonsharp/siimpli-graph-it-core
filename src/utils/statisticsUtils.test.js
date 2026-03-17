@@ -1,6 +1,6 @@
 
 import { describe, it, expect } from 'vitest';
-import { aggregateData } from './statisticsUtils';
+import { aggregateData } from './statisticsUtils.js';
 
 describe('statisticsUtils', () => {
     describe('aggregateData', () => {
@@ -42,7 +42,8 @@ describe('statisticsUtils', () => {
             // Code uses 1.96 for all N < 30 in the simplified version I wrote? 
             // "return 1.96;" was the fallback.
 
-            const result = aggregateData(data, xAxisInfo, seriesInfo, { calculateCI: true, confidenceLevel: 95 });
+            const testSeriesInfo = [{ yAxisInfo: { columnName: 'Value' }, showConfidenceInterval: true, confidenceLevel: 95 }];
+            const result = aggregateData(data, xAxisInfo, testSeriesInfo);
             const item = result[0];
 
             expect(item.Value).toBe(14);
@@ -57,7 +58,8 @@ describe('statisticsUtils', () => {
 
         it('should handle single value groups (CI should be mean)', () => {
             const data = [{ Year: '2025', Value: 10 }];
-            const result = aggregateData(data, xAxisInfo, seriesInfo, { calculateCI: true });
+            const testSeriesInfo = [{ yAxisInfo: { columnName: 'Value' }, showConfidenceInterval: true }];
+            const result = aggregateData(data, xAxisInfo, testSeriesInfo);
 
             expect(result[0].Value).toBe(10);
             expect(result[0].Value_ci_lower).toBe(10);

@@ -182,16 +182,16 @@ export class GraphCompositionRenderer {
         const contourGroup = g.append("g").attr("class", "contours");
         const contourColorScale = d3.scaleSequential(d3.interpolateViridis).domain([0, thresholds.length - 1]);
 
-        contours.forEach((contour, i) => {
-            const contourPath = d3.geoPath();
-            contourGroup.append("path")
-                .datum(contour)
-                .attr("d", contourPath)
-                .attr("fill", "none")
-                .attr("stroke", contourColorScale(i))
-                .attr("stroke-width", 1.5)
-                .attr("stroke-opacity", 0.7);
-        });
+        // Optimized: Use D3 data binding instead of forEach loop
+        contourGroup.selectAll("path")
+            .data(contours)
+            .enter()
+            .append("path")
+            .attr("d", d => d3.geoPath()(d))
+            .attr("fill", "none")
+            .attr("stroke", (d, i) => contourColorScale(i))
+            .attr("stroke-width", 1.5)
+            .attr("stroke-opacity", 0.7);
 
         return { thresholds, colorScale: contourColorScale, contourInfo };
     }
@@ -204,6 +204,8 @@ export class GraphCompositionRenderer {
         const isMultiYScale = Array.isArray(yScale);
         const equationItems = [];
 
+        // Pre-compute rendering data for all curve fits
+        const renderData = [];
         curveFits.forEach((curveFit, index) => {
             if (!curveFit.enabled || !curveFit.result || !curveFit.result.curvePoints) return;
 
@@ -286,24 +288,41 @@ export class GraphCompositionRenderer {
                 return;
             }
 
-            g.append("path")
-                .datum(validPoints)
-                .attr("fill", "none")
-                .attr("stroke", curveFit.color)
-                .attr("stroke-width", 3)
-                .attr("stroke-dasharray", index === 0 ? "none" : "5,5")
-                .attr("d", line);
-
-            if (curveFit.result.equation) {
-                equationItems.push({
-                    text: curveFit.result.equation,
-                    r2: curveFit.result.rSquared?.toFixed?.(4) ?? '',
-                    color: curveFit.color,
-                    seriesLabel
-                });
-            }
+            renderData.push({
+                points: validPoints,
+                line,
+                color: curveFit.color,
+                index,
+                equation: curveFit.result.equation,
+                rSquared: curveFit.result.rSquared,
+                seriesLabel
+            });
 
             debugLog(`Curve Fit ${index} Points:`, curveFit.result.curvePoints);
+        });
+
+        // Optimized: Use D3 data binding to render all curve fits at once
+        g.selectAll(".curve-fit-path")
+            .data(renderData)
+            .enter()
+            .append("path")
+            .attr("class", "curve-fit-path")
+            .attr("fill", "none")
+            .attr("stroke", d => d.color)
+            .attr("stroke-width", 3)
+            .attr("stroke-dasharray", d => d.index === 0 ? "none" : "5,5")
+            .attr("d", d => d.line(d.points));
+
+        // Build equation items from rendered data
+        renderData.forEach(d => {
+            if (d.equation) {
+                equationItems.push({
+                    text: d.equation,
+                    r2: d.rSquared?.toFixed?.(4) ?? '',
+                    color: d.color,
+                    seriesLabel: d.seriesLabel
+                });
+            }
         });
 
         return { legendItems: equationItems };
@@ -366,22 +385,25 @@ export class GraphCompositionRenderer {
                 .attr('font-weight', 600).attr('font-size', 12).attr('font-family', 'sans-serif')
                 .attr('fill', '#222').text('Curve Fit Legend');
 
-            legendItems.forEach((it, i) => {
-                const itemY = legendY + padding + headerHeight + (i * lineHeight) + 6;
+            // Optimized: Use D3 data binding for legend items
+            const legendItemsGroup = legendGroup.selectAll('.legend-item')
+                .data(legendItems)
+                .enter()
+                .append('g')
+                .attr('class', 'legend-item')
+                .attr('transform', (d, i) => `translate(0,${padding + headerHeight + (i * lineHeight)})`);
 
-                legendGroup.append('rect')
-                    .attr('x', legendX + padding).attr('y', itemY - swatchSize + 2)
-                    .attr('width', swatchSize).attr('height', swatchSize)
-                    .attr('fill', it.color || '#000').attr('rx', 2).attr('ry', 2);
+            legendItemsGroup.append('rect')
+                .attr('x', padding).attr('y', 6 - swatchSize + 2)
+                .attr('width', swatchSize).attr('height', swatchSize)
+                .attr('fill', d => d.color || '#000').attr('rx', 2).attr('ry', 2);
 
-                const fullLbl = `Fit ${i + 1}${it.seriesLabel}: ${it.text} (R²=${it.r2})`;
-                const textEl = legendGroup.append('text')
-                    .attr('x', legendX + padding + swatchSize + textGap).attr('y', itemY)
-                    .attr('font-size', 12).attr('font-family', 'sans-serif').attr('fill', '#111')
-                    .text(fullLbl);
-
-                textEl.append('title').text(fullLbl);
-            });
+            legendItemsGroup.append('text')
+                .attr('x', padding + swatchSize + textGap).attr('y', 6)
+                .attr('font-size', 12).attr('font-family', 'sans-serif').attr('fill', '#111')
+                .text((d, i) => `Fit ${i + 1}${d.seriesLabel}: ${d.text} (R²=${d.r2})`)
+                .append('title')
+                .text((d, i) => `Fit ${i + 1}${d.seriesLabel}: ${d.text} (R²=${d.r2})`);
         } catch (e) {
             debugWarn('Failed to render curve fit legend', e);
         }

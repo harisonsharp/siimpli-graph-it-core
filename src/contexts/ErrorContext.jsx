@@ -59,7 +59,7 @@ export const ErrorProvider = ({ children }) => {
                 <div className="fixed top-4 right-4 bg-red-500 text-white p-4 rounded-lg shadow-lg z-50 max-w-md">
                     <div className="flex items-center justify-between">
                         <span className="text-sm">{error}</span>
-                        <button
+                        <button type="submit"
                             onClick={hideError}
                             className="ml-4 text-white hover:text-gray-200 text-xl font-bold"
                         >
@@ -72,7 +72,7 @@ export const ErrorProvider = ({ children }) => {
                 <div className="fixed top-4 right-4 bg-green-500 text-white p-4 rounded-lg shadow-lg z-50 max-w-md">
                     <div className="flex items-center justify-between">
                         <span className="text-sm">{success}</span>
-                        <button
+                        <button type="submit"
                             onClick={() => setSuccess(null)}
                             className="ml-4 text-white hover:text-gray-200 text-xl font-bold"
                         >

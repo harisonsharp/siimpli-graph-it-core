@@ -1,5 +1,5 @@
 /**
- * @fileoverview Comprehensive math utilities for math operations.
+  * @fileoverview Comprehensive math utilities for math operations.
  *
  * @author Harison Sharp
  * @since 0.2.0

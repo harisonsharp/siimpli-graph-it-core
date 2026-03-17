@@ -172,9 +172,83 @@ export class CanvasSizer {
     }
 
     /**
+     * Calculate SVG bounds by traversing elements (fallback for getBBox unavailability)
+     * Used in headless environments like jsdom where getBBox is not implemented.
+     * @private
+     */
+    _calculateBoundsFromElements(target) {
+        let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+
+        // Recursively traverse all SVG elements to find bounds
+        const traverse = (el) => {
+            if (!el) return;
+
+            const x = parseFloat(el.getAttribute('x')) || 0;
+            const y = parseFloat(el.getAttribute('y')) || 0;
+            const cx = parseFloat(el.getAttribute('cx'));
+            const cy = parseFloat(el.getAttribute('cy'));
+            const r = parseFloat(el.getAttribute('r'));
+            const width = parseFloat(el.getAttribute('width'));
+            const height = parseFloat(el.getAttribute('height'));
+            const x1 = parseFloat(el.getAttribute('x1'));
+            const y1 = parseFloat(el.getAttribute('y1'));
+            const x2 = parseFloat(el.getAttribute('x2'));
+            const y2 = parseFloat(el.getAttribute('y2'));
+
+            // Handle circle elements
+            if (!Number.isNaN(cx) && !Number.isNaN(cy) && !Number.isNaN(r)) {
+                minX = Math.min(minX, cx - r);
+                maxX = Math.max(maxX, cx + r);
+                minY = Math.min(minY, cy - r);
+                maxY = Math.max(maxY, cy + r);
+            }
+
+            // Handle rect elements
+            if (!Number.isNaN(x) && !Number.isNaN(y) && !Number.isNaN(width) && !Number.isNaN(height)) {
+                minX = Math.min(minX, x);
+                maxX = Math.max(maxX, x + width);
+                minY = Math.min(minY, y);
+                maxY = Math.max(maxY, y + height);
+            }
+
+            // Handle line elements
+            if (!Number.isNaN(x1) && !Number.isNaN(y1) && !Number.isNaN(x2) && !Number.isNaN(y2)) {
+                minX = Math.min(minX, x1, x2);
+                maxX = Math.max(maxX, x1, x2);
+                minY = Math.min(minY, y1, y2);
+                maxY = Math.max(maxY, y1, y2);
+            }
+
+            // Handle text elements (approximate)
+            if (el.tagName === 'text' || el.tagName === 'tspan') {
+                const textX = parseFloat(el.getAttribute('x')) || x;
+                const textY = parseFloat(el.getAttribute('y')) || y;
+                if (!Number.isNaN(textX) && !Number.isNaN(textY)) {
+                    minX = Math.min(minX, textX);
+                    minY = Math.min(minY, textY - 10);
+                    maxX = Math.max(maxX, textX + 100);
+                    maxY = Math.max(maxY, textY + 10);
+                }
+            }
+
+            // Recurse into children
+            for (const child of el.children || []) {
+                traverse(child);
+            }
+        };
+
+        traverse(target);
+
+        return (Number.isFinite(minX) && Number.isFinite(maxX) && Number.isFinite(minY) && Number.isFinite(maxY))
+            ? { x: minX, y: minY, width: maxX - minX, height: maxY - minY }
+            : null;
+    }
+
+    /**
      * Update canvas size based on DOM bounding box (Synchronous)
      * Performs immediate measurement. Use this during imperative generation flows.
-     * 
+     * Gracefully handles environments where getBBox is unavailable (e.g., jsdom).
+     *
      * @param {SVGElement} groupElement - Optional group to measure
      * @returns {CanvasSizer} this for chaining
      */
@@ -188,7 +262,21 @@ export class CanvasSizer {
                 return this;
             }
 
-            const bbox = target.getBBox();
+            let bbox = null;
+
+            // Try getBBox first (works in browsers)
+            try {
+                if (typeof target.getBBox === 'function') {
+                    bbox = target.getBBox();
+                }
+            } catch {
+                // getBBox not available, fall through to element-based measurement
+            }
+
+            // Fallback: calculate bounds from elements (for headless/jsdom)
+            if (!bbox) {
+                bbox = this._calculateBoundsFromElements(target);
+            }
 
             if (!bbox || bbox.width === 0 || bbox.height === 0) {
                 console.warn('[CanvasSizer] Invalid bounding box from DOM');
@@ -262,6 +350,7 @@ export class CanvasSizer {
         if (multiplier > 0 && multiplier <= 4) {
             this.config.dpiMultiplier = multiplier;
         }
+        return this;
     }
 
     /**

@@ -57,7 +57,7 @@ describe('CanvasSizer', () => {
         it('should use default configuration', () => {
             expect(sizer.config.maxWidth).toBe(8192);
             expect(sizer.config.maxHeight).toBe(8192);
-            expect(sizer.config.expandMode).toBe('expand');
+            expect(sizer.config.expandMode).toBe('scale');
         });
 
         it('should merge custom options with defaults', () => {
@@ -128,6 +128,10 @@ describe('CanvasSizer', () => {
     });
 
     describe('ensureFit', () => {
+        beforeEach(() => {
+            sizer.config.expandMode = 'expand';
+        });
+
         it('should calculate and apply dimensions in expand mode', () => {
             sizer.updateFromData({
                 xMin: 0,
@@ -249,7 +253,7 @@ describe('CanvasSizer', () => {
             // ViewBox should encompass content with margins
             const viewBoxCall = mockSVG.setAttribute.mock.calls.find(call => call[0] === 'viewBox');
             expect(viewBoxCall).toBeDefined();
-            expect(viewBoxCall[1]).toContain('100'); // Should start near xMin
+            expect(viewBoxCall[1]).toContain('20'); // xMin (100) - margins.left (80) = 20
         });
     });
 

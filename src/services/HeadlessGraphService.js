@@ -19,8 +19,8 @@ import { invoke } from '@tauri-apps/api/core';
 import { writeFile } from '@tauri-apps/plugin-fs';
 import * as d3 from 'd3';
 import { ExportService } from './ExportService.js';
-import { GraphService } from './GraphService.js';
-import { FileService } from './FileService.js';
+import { renderGraph } from '../core/renderGraph.js';
+import { CanvasSizer } from './CanvasSizer.js';
 import { debugLog, debugWarn } from '../utils/debug.js';
 
 /**
@@ -61,13 +61,19 @@ export class HeadlessGraphService {
     }
 
     /**
-     * Load logo image for watermarking
+     * Load logo as data URI for embedding in SVG
      */
     async loadLogo() {
         return new Promise((resolve) => {
             const img = new Image();
             img.onload = () => {
-                this.logoImage = img;
+                // Convert image to data URI
+                const canvas = document.createElement('canvas');
+                canvas.width = img.naturalWidth;
+                canvas.height = img.naturalHeight;
+                const ctx = canvas.getContext('2d');
+                ctx.drawImage(img, 0, 0);
+                this.logoImage = canvas.toDataURL('image/png');
                 debugLog('[HeadlessGraphService] Logo loaded successfully');
                 resolve();
             };
@@ -75,8 +81,8 @@ export class HeadlessGraphService {
                 console.warn('[HeadlessGraphService] Failed to load logo:', err);
                 resolve(); // Continue without logo
             };
-            // Try multiple potential paths
-            img.src = './src/graphs/logo.png';
+            // Load from public directory
+            img.src = './public/siimpli-graph-it-logo.png';
         });
     }
 
@@ -97,7 +103,7 @@ export class HeadlessGraphService {
             const width = config.globalSettings?.graphDimensions?.width || 800;
             const height = config.globalSettings?.graphDimensions?.height || 600;
 
-            // Set dimensions
+            // Set initial dimensions (will be expanded by CanvasSizer if needed)
             svgElement.setAttribute('width', width);
             svgElement.setAttribute('height', height);
             svgElement.style.position = 'absolute';
@@ -121,42 +127,41 @@ export class HeadlessGraphService {
                 throw new Error('No data loaded from CSV files');
             }
 
-            // Create D3 selection for SVG
-            const svg = d3.select(svgElement);
+            // Use the proper renderGraph function to handle all rendering
+            const result = renderGraph({
+                svg: svgElement,
+                csvData: csvData,
+                graphConfig: config.graphConfig,
+                globalSettings: config.globalSettings,
+                curveFits: config.curveFits || [],
+                logoDataUri: this.logoImage,
+                colorSchemes: this.colorSchemes,
+                isBatchMode: true
+            });
 
-            // Initialize GraphService
-            const graphService = new GraphService();
-
-            // Parse configuration
-            const graphConfig = {
-                xAxis: config.graphConfig.xAxis,
-                yAxes: config.graphConfig.series.map(s => s.yAxis),
-                graphType: config.graphConfig.graphType || 'scatter',
-                title: config.graphConfig.title || graphName || 'Graph',
-                colorGrading: config.graphConfig.colorGrading,
-                contouring: config.graphConfig.contouring,
-                series: config.graphConfig.series,
-            };
-
-            const globalSettings = {
-                colorScheme: config.globalSettings?.colorScheme || 'green-red',
-                axisIntercept: config.globalSettings?.axisIntercept || 'origin',
-                customIntercept: config.globalSettings?.customIntercept,
-                graphDimensions: {
-                    width,
-                    height
-                },
-                dualYAxis: config.globalSettings?.dualYAxis || false,
-            };
-
-            // Calculate scales and render graph
-            await this.renderGraph(svg, csvData, graphConfig, globalSettings, config.curveFits || []);
+            if (!result.success) {
+                throw new Error(result.error || 'Graph rendering failed');
+            }
 
             // Wait a moment for D3 rendering to complete
             await new Promise(resolve => setTimeout(resolve, 100));
 
+            // Resize SVG to fit all rendered content (logo, tables, legends)
+            // This prevents elements from being clipped off the bottom
+            const sizer = new CanvasSizer(svgElement, {
+                margins: { top: 60, right: 60, bottom: 120, left: 80 },
+                expandMode: 'expand'
+            });
+            sizer.updateFromDOMSync().ensureFit();
+
+            // Update canvas to match expanded SVG size
+            const finalWidth = parseInt(svgElement.getAttribute('width'), 10);
+            const finalHeight = parseInt(svgElement.getAttribute('height'), 10);
+            canvasElement.width = finalWidth;
+            canvasElement.height = finalHeight;
+
             // Export to PNG
-            const pngData = await ExportService.exportSvgToPng(svgElement, canvasElement, this.logoImage);
+            const pngData = await ExportService.exportSvgToPng(svgElement, canvasElement, null);
 
             // Save to file using Tauri
             await this.savePngToFile(pngData, outputPath);
@@ -177,7 +182,6 @@ export class HeadlessGraphService {
      * Load CSV files from paths
      */
     async loadCsvFiles(filePaths) {
-        const fileService = new FileService();
         const allData = [];
 
         for (const pathOrObj of filePaths) {
@@ -202,187 +206,6 @@ export class HeadlessGraphService {
         return allData;
     }
 
-    /**
-     * Render graph using GraphService
-     */
-    async renderGraph(svg, data, graphConfig, globalSettings, curveFits) {
-        const graphService = new GraphService();
-
-        // Set up margins
-        const margin = { top: 60, right: 60, bottom: 80, left: 80 };
-        const width = globalSettings.graphDimensions.width - margin.left - margin.right;
-        const height = globalSettings.graphDimensions.height - margin.top - margin.bottom;
-
-        // Create main group
-        const g = svg.append('g')
-            .attr('transform', `translate(${margin.left},${margin.top})`);
-
-        // Extract column data
-        const xData = data.map(d => +d[graphConfig.xAxis]).filter(v => !isNaN(v));
-        const yDataArrays = graphConfig.yAxes.map(yAxis =>
-            data.map(d => +d[yAxis]).filter(v => !isNaN(v))
-        );
-
-        // Create scales
-        const xExtent = d3.extent(xData);
-        const yExtent = d3.extent(yDataArrays.flat());
-
-        const xScale = d3.scaleLinear()
-            .domain(xExtent)
-            .range([0, width]);
-
-        const yScale = d3.scaleLinear()
-            .domain(yExtent)
-            .range([height, 0]);
-
-        // Draw axes
-        const xAxis = d3.axisBottom(xScale);
-        const yAxis = d3.axisLeft(yScale);
-
-        g.append('g')
-            .attr('class', 'x-axis')
-            .attr('transform', `translate(0,${height})`)
-            .call(xAxis)
-            .append('text')
-            .attr('x', width / 2)
-            .attr('y', 40)
-            .attr('fill', '#000')
-            .style('text-anchor', 'middle')
-            .style('font-size', '14px')
-            .text(graphConfig.xAxis);
-
-        g.append('g')
-            .attr('class', 'y-axis')
-            .call(yAxis)
-            .append('text')
-            .attr('transform', 'rotate(-90)')
-            .attr('y', -50)
-            .attr('x', -height / 2)
-            .attr('fill', '#000')
-            .style('text-anchor', 'middle')
-            .style('font-size', '14px')
-            .text(graphConfig.yAxes.join(', '));
-
-        // Draw title
-        svg.append('text')
-            .attr('x', globalSettings.graphDimensions.width / 2)
-            .attr('y', 30)
-            .attr('text-anchor', 'middle')
-            .style('font-size', '18px')
-            .style('font-weight', 'bold')
-            .text(graphConfig.title);
-
-        // Draw data based on graph type
-        if (graphConfig.graphType === 'scatter') {
-            graphConfig.series.forEach((series, idx) => {
-                const seriesData = data.map(d => ({
-                    x: +d[graphConfig.xAxis],
-                    y: +d[series.yAxis]
-                })).filter(d => !isNaN(d.x) && !isNaN(d.y));
-
-                g.selectAll(`.dot-${idx}`)
-                    .data(seriesData)
-                    .enter()
-                    .append('circle')
-                    .attr('class', `dot-${idx}`)
-                    .attr('cx', d => xScale(d.x))
-                    .attr('cy', d => yScale(d.y))
-                    .attr('r', 3)
-                    .attr('fill', this.getSeriesColor(idx, graphConfig.series.length));
-            });
-        } else if (graphConfig.graphType === 'line') {
-            const line = d3.line()
-                .x(d => xScale(d.x))
-                .y(d => yScale(d.y));
-
-            graphConfig.series.forEach((series, idx) => {
-                const seriesData = data.map(d => ({
-                    x: +d[graphConfig.xAxis],
-                    y: +d[series.yAxis]
-                })).filter(d => !isNaN(d.x) && !isNaN(d.y))
-                    .sort((a, b) => a.x - b.x);
-
-                g.append('path')
-                    .datum(seriesData)
-                    .attr('class', `line-${idx}`)
-                    .attr('fill', 'none')
-                    .attr('stroke', this.getSeriesColor(idx, graphConfig.series.length))
-                    .attr('stroke-width', 2)
-                    .attr('d', line);
-            });
-        } else if (graphConfig.graphType === 'bar') {
-            const barWidth = width / data.length * 0.8;
-
-            graphConfig.series.forEach((series, idx) => {
-                g.selectAll(`.bar-${idx}`)
-                    .data(data)
-                    .enter()
-                    .append('rect')
-                    .attr('class', `bar-${idx}`)
-                    .attr('x', (d, i) => i * (width / data.length) + idx * (barWidth / graphConfig.series.length))
-                    .attr('y', d => yScale(+d[series.yAxis]))
-                    .attr('width', barWidth / graphConfig.series.length)
-                    .attr('height', d => height - yScale(+d[series.yAxis]))
-                    .attr('fill', this.getSeriesColor(idx, graphConfig.series.length));
-            });
-        }
-
-        // Draw curve fits if specified
-        if (curveFits && curveFits.length > 0) {
-            curveFits.forEach(fit => {
-                if (fit.enabled && fit.seriesIndex < graphConfig.series.length) {
-                    this.drawCurveFit(g, data, graphConfig, fit, xScale, yScale, width);
-                }
-            });
-        }
-    }
-
-    /**
-     * Get color for series based on index
-     */
-    getSeriesColor(index, total) {
-        const colors = ['#1f77b4', '#ff7f0e', '#2ca02c', '#d62728', '#9467bd', '#8c564b'];
-        return colors[index % colors.length];
-    }
-
-    /**
-     * Draw curve fit
-     */
-    drawCurveFit(g, data, graphConfig, fit, xScale, yScale, width) {
-        const series = graphConfig.series[fit.seriesIndex];
-        const seriesData = data.map(d => ({
-            x: +d[graphConfig.xAxis],
-            y: +d[series.yAxis]
-        })).filter(d => !isNaN(d.x) && !isNaN(d.y))
-            .sort((a, b) => a.x - b.x);
-
-        if (seriesData.length < 2) return;
-
-        // Filter by xMin/xMax if specified
-        let filteredData = seriesData;
-        if (fit.xMin !== undefined || fit.xMax !== undefined) {
-            filteredData = seriesData.filter(d =>
-                (fit.xMin === undefined || d.x >= fit.xMin) &&
-                (fit.xMax === undefined || d.x <= fit.xMax)
-            );
-        }
-
-        if (filteredData.length < 2) return;
-
-        // Generate curve line
-        const line = d3.line()
-            .x(d => xScale(d.x))
-            .y(d => yScale(d.y));
-
-        g.append('path')
-            .datum(filteredData)
-            .attr('class', 'curve-fit')
-            .attr('fill', 'none')
-            .attr('stroke', fit.color || '#ff0000')
-            .attr('stroke-width', 2)
-            .attr('stroke-dasharray', '5,5')
-            .attr('d', line);
-    }
 
     /**
      * Save PNG data to file using Tauri
