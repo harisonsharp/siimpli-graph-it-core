@@ -32,8 +32,8 @@ export * from './services/CanvasSizer.js';
 export * from './services/SvgPlottingService.js';
 export * from './services/HeadlessGraphService.js';
 export * from './services/FileNameParsingService.js';
-export * from './services/ImageExportService.js';
-export * from './services/CanvasSizer.js';
+export * from './io/IOProvider.js';
+export * from './io/TauriIOProvider.js';
 // Rendering
 export * from './rendering/ScaleFactory.js';
 export * from './rendering/ChartRenderers/ChartRendererFactory.js';
@@ -54,6 +54,11 @@ export * from './rendering/AnnotationRenderer.js';
 export * from './core/services/BatchProcessingService.js';
 export * from './core/validation/ConfigValidator.js';
 export * from './core/validation/DataValidator.js';
+export { renderGraph } from './core/renderGraph.js';
+
+// Contexts
+export * from './contexts/ErrorContext.jsx';
+export * from './contexts/ConfigContext.jsx';
 
 // Components
 export * from './components/GraphController.jsx';
