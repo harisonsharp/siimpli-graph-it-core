@@ -151,7 +151,10 @@ export class LegendRenderer {
         }
         seriesInfo.forEach((series, i) => {
             debugLog('[LegendRenderer.drawSeriesLegend] validData, series.filterColumn', validData, series.filterColumn);
-            let uniqueValues = SymbolFactory.getUniqueValues(validData, series.filterColumn?.split('::')[0]);
+            let uniqueValues = [];
+            if (SymbolFactory.shouldUseUniqueSymbolEncoding(series)) {
+                uniqueValues = SymbolFactory.getUniqueValues(validData, series.filterColumn?.split('::')[0]);
+            }
             debugLog('[LegendRenderer.drawSeriesLegend] uniqueValues', uniqueValues);
             if (series.excludeEmptyValues) {
                 uniqueValues = uniqueValues.filter(v => v !== undefined && v !== null && v !== '');
@@ -275,4 +278,10 @@ export class LegendRenderer {
         });
     }
 }
+
+// Backward-compatible named exports for legacy imports that expect
+// free functions from @siimpli/graph-it-core.
+export const drawColorLegend = (...args) => LegendRenderer.drawColorLegend(...args);
+export const drawContourLegend = (...args) => LegendRenderer.drawContourLegend(...args);
+export const drawSeriesLegend = (...args) => LegendRenderer.drawSeriesLegend(...args);
 

@@ -181,7 +181,7 @@ describe('renderGraph integration tests', () => {
         };
         
         // Filter the data directly mimicking FileService filter if it's external, or just expect circles count to match total
-        const resultUnfiltered = renderGraph({
+        renderGraph({
             svg, csvData, graphConfig: config, globalSettings: defaultGlobalSettings, colorSchemes: defaultColors
         });
         const countUnfiltered = svg.querySelectorAll('path.dot').length;
@@ -191,6 +191,42 @@ describe('renderGraph integration tests', () => {
         // Wait, renderGraph's FileService.filterValidData filters invalid coordinates out. Filter expressions are done BEFORE renderGraph usually, wait...
         // Let's just create a scatter plot and verify things correctly render.
         expect(countUnfiltered).toBeGreaterThan(0);
+    });
+
+    it('Scatter unique symbols: legacy config without filterType still creates distinct shapes', () => {
+        const sampleData = [
+            { throughput: 10, grand_total_adj: 1.2, powerlaw_ore_rehandle_fixed: true },
+            { throughput: 20, grand_total_adj: 1.8, powerlaw_ore_rehandle_fixed: false },
+            { throughput: 30, grand_total_adj: 2.4, powerlaw_ore_rehandle_fixed: true },
+            { throughput: 40, grand_total_adj: 2.9, powerlaw_ore_rehandle_fixed: false }
+        ];
+
+        const config = {
+            graphType: 'scatter',
+            xAxis: 'throughput',
+            series: [{
+                yAxis: 'grand_total_adj',
+                type: 'scatter',
+                filter: true,
+                filterColumn: 'powerlaw_ore_rehandle_fixed'
+            }]
+        };
+
+        const result = renderGraph({
+            svg,
+            csvData: sampleData,
+            graphConfig: config,
+            globalSettings: defaultGlobalSettings,
+            colorSchemes: defaultColors
+        });
+
+        expect(result.success).toBe(true);
+
+        const dots = Array.from(svg.querySelectorAll('path.dot'));
+        expect(dots.length).toBe(4);
+
+        const shapePaths = new Set(dots.map(dot => dot.getAttribute('d')));
+        expect(shapePaths.size).toBeGreaterThan(1);
     });
 
     it('Join X-axis: verify unified axis behaves correctly', () => {

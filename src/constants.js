@@ -35,6 +35,13 @@ export const GRAPH_CONFIG = {
 };
 
 export const WATERMARK_CONFIG = {
+    // Visual watermark tile settings used by browser/canvas PNG export.
+    seed: 'a4b7e1c8-d9f2-4g5h-6i7j-8k9l0m1n2o3p',
+    tilePxSize: 64,
+    shadeDifference: 2,
+    baseColor: { r: 255, g: 255, b: 255 },
+
+    // Invisible watermark embedding settings used by headless PNG export.
     secret: null,
     domain: 'siimpli-graph-it',
     salt: '',
@@ -76,6 +83,11 @@ export const DEFAULT_GRAPH_CONFIG = {
     yAxisLabel2: '',
     axisIntercept: 'origin',
     customIntercept: { x: 0, y: 0 },
+    staticScales: {
+        x: { enabled: false, min: '', max: '', step: '' },
+        y: { enabled: false, min: '', max: '', step: '' },
+        y2: { enabled: false, min: '', max: '', step: '' }
+    },
     colorScheme: 'green-red',
     dualYAxis: false,
     yAxis2: '',

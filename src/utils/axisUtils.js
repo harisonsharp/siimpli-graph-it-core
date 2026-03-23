@@ -104,9 +104,45 @@ const formatNumber = (value, thresholdDigits) => {
     return value;
 };
 
-const drawXAxis = (g, xScale, xAxisY, xAxisLabelOffset, xAxisLabel, graphType, data, xAxisInfo) => {
+const getStaticScale = (config, axisKey) => {
+    const axisScale = config?.staticScales?.[axisKey];
+    if (!axisScale || axisScale.enabled !== true) {
+        return null;
+    }
+
+    const min = Number.parseFloat(axisScale.min);
+    const max = Number.parseFloat(axisScale.max);
+    const step = Number.parseFloat(axisScale.step);
+
+    if (!Number.isFinite(min) || !Number.isFinite(max) || !Number.isFinite(step) || max <= min || step <= 0) {
+        return null;
+    }
+
+    return { min, max, step };
+};
+
+const buildTickValues = (min, max, step, maxTicks = 500) => {
+    const ticks = [];
+    let index = 0;
+    let current = min;
+
+    while (current <= max + (step * 1e-6) && index < maxTicks) {
+        ticks.push(Number(current.toFixed(12)));
+        index += 1;
+        current = min + (index * step);
+    }
+
+    if (ticks.length > 0 && ticks[ticks.length - 1] !== max) {
+        ticks.push(max);
+    }
+
+    return ticks;
+};
+
+const drawXAxis = (g, xScale, xAxisY, xAxisLabelOffset, xAxisLabel, graphType, data, xAxisInfo, config = {}) => {
     // Create axis generator
     const axisGenerator = d3.axisBottom(xScale);
+    const staticXScale = getStaticScale(config, 'x');
 
     // Histogram specific handling - Range Labels
     if (graphType === 'histogram' && data && xAxisInfo) {
@@ -151,6 +187,9 @@ const drawXAxis = (g, xScale, xAxisY, xAxisLabelOffset, xAxisLabel, graphType, d
             // For now, removing the formatNumber override is sufficient.
         } else {
             // Numeric X-Axis (Scatter, Line, etc.)
+            if (staticXScale) {
+                axisGenerator.tickValues(buildTickValues(staticXScale.min, staticXScale.max, staticXScale.step));
+            }
             axisGenerator.tickFormat(d => formatNumber(d, 6));
         }
     }
@@ -213,10 +252,15 @@ const drawXAxis = (g, xScale, xAxisY, xAxisLabelOffset, xAxisLabel, graphType, d
     return xAxis;
 };
 
-const drawPrimaryYAxis = (g, xScale, primaryYScale, yAxisX, primaryColor) => {
+const drawPrimaryYAxis = (g, xScale, primaryYScale, yAxisX, primaryColor, config = {}) => {
     const axisGenerator = d3.axisLeft(primaryYScale)
         .tickSizeOuter(0)
         .tickFormat(d => formatNumber(d, 8)); // 8 digits threshold for Y-axis
+
+    const staticYScale = getStaticScale(config, 'y');
+    if (staticYScale) {
+        axisGenerator.tickValues(buildTickValues(staticYScale.min, staticYScale.max, staticYScale.step));
+    }
 
     const primaryYAxis = g.append('g')
         .attr('class', 'y-axis y-axis-primary')
@@ -237,10 +281,15 @@ const drawPrimaryYAxis = (g, xScale, primaryYScale, yAxisX, primaryColor) => {
     return primaryYAxis;
 };
 
-const drawSecondaryYAxis = (g, secondaryYScale, width, secondaryColor) => {
+const drawSecondaryYAxis = (g, secondaryYScale, width, secondaryColor, config = {}) => {
     const axisGenerator = d3.axisRight(secondaryYScale)
         .tickSizeOuter(0)
         .tickFormat(d => formatNumber(d, 8)); // 8 digits threshold for Y-axis
+
+    const staticY2Scale = getStaticScale(config, 'y2');
+    if (staticY2Scale) {
+        axisGenerator.tickValues(buildTickValues(staticY2Scale.min, staticY2Scale.max, staticY2Scale.step));
+    }
 
     const secondaryYAxis = g.append('g')
         .attr('class', 'y-axis y-axis-secondary')
@@ -386,11 +435,11 @@ export const drawAxes = (
     const primaryColor = axisColors?.primary || '#333';
     const secondaryColor = axisColors?.secondary || '#333';
 
-    drawXAxis(g, xScale, xAxisY, 50, xAxisLabel, graphType, data, xAxisInfo);
-    drawPrimaryYAxis(g, xScale, primaryYScale, yAxisX, primaryColor);
+    drawXAxis(g, xScale, xAxisY, 50, xAxisLabel, graphType, data, xAxisInfo, config);
+    drawPrimaryYAxis(g, xScale, primaryYScale, yAxisX, primaryColor, config);
     debugLog('[drawAxes] Secondary Y Scale and isDualAxis: ', secondaryYScale, isDualAxis);
     if (isDualAxis && secondaryYScale) {
-        drawSecondaryYAxis(g, secondaryYScale, width, secondaryColor);
+        drawSecondaryYAxis(g, secondaryYScale, width, secondaryColor, config);
     }
 
     drawLabels(g, height, width, margin, finalPrimaryLabel, secondaryLabel, xAxisLabel, xAxisY, 50, primaryColor, secondaryColor);

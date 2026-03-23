@@ -146,7 +146,10 @@ export class UnifiedTableRenderer {
 
             // Check for unique filter (categorical shapes)
             const filterColumn = series.filterColumn?.split('::')[0];
-            let uniqueValues = filterColumn ? SymbolFactory.getUniqueValues(validData, filterColumn) : [];
+            let uniqueValues = [];
+            if (filterColumn && SymbolFactory.shouldUseUniqueSymbolEncoding(series)) {
+                uniqueValues = SymbolFactory.getUniqueValues(validData, filterColumn);
+            }
 
             if (series.excludeEmptyValues) {
                 uniqueValues = uniqueValues.filter(v => v !== undefined && v !== null && v !== '');

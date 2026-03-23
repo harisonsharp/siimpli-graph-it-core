@@ -22,7 +22,19 @@
  */
 
 export const generateWatermarkTile = (config) => {
-    const { seed, tilePxSize, shadeDifference, baseColor } = config;
+    const normalizedConfig = {
+        seed: 'siimpli-graph-it',
+        tilePxSize: 64,
+        shadeDifference: 2,
+        ...(config || {})
+    };
+    normalizedConfig.baseColor = {
+        r: 255,
+        g: 255,
+        b: 255,
+        ...(config?.baseColor || {})
+    };
+    const { seed, tilePxSize, shadeDifference, baseColor } = normalizedConfig;
     const tileCanvas = document.createElement('canvas');
     tileCanvas.width = tilePxSize;
     tileCanvas.height = tilePxSize;
@@ -93,11 +105,24 @@ const getConfigKey = (config) =>
  * @returns {CanvasPattern} Reusable watermark pattern
  */
 export const getCachedWatermarkPattern = (config, ctx) => {
-    const configKey = getConfigKey(config);
+    const normalizedConfig = {
+        seed: 'siimpli-graph-it',
+        tilePxSize: 64,
+        shadeDifference: 2,
+        ...(config || {})
+    };
+    normalizedConfig.baseColor = {
+        r: 255,
+        g: 255,
+        b: 255,
+        ...(config?.baseColor || {})
+    };
+
+    const configKey = getConfigKey(normalizedConfig);
 
     // Invalidate cache if config changed
     if (!cachedWatermarkTile || cachedConfigKey !== configKey) {
-        cachedWatermarkTile = generateWatermarkTile(config);
+        cachedWatermarkTile = generateWatermarkTile(normalizedConfig);
         cachedConfigKey = configKey;
     }
 

@@ -22,6 +22,7 @@
  */
 import { debugLog, debugWarn } from '../utils/debug.js';
 
+
 export class FileNameParsingService {
     static parseGraphFilename(filename) {
         if (!filename || typeof filename !== 'string') {
@@ -139,4 +140,13 @@ export class FileNameParsingService {
             return null;
         }
     }
+
+    // Backward-compatible instance API for callers that instantiate the service.
+    parseGraphFilename(filename) {
+        return FileNameParsingService.parseGraphFilename(filename);
+    }
 }
+
+// Backward-compatible export alias for legacy import spelling.
+export { FileNameParsingService as FilenameParsingService };
+

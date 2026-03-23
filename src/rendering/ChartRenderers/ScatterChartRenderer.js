@@ -79,9 +79,15 @@ export class ScatterChartRenderer extends BaseChartRenderer {
         let symbolMap = null;
         let filterColumn = null;
 
-        if (currentSeriesConfig && currentSeriesConfig.filter && currentSeriesConfig.filterType === 'unique' && currentSeriesConfig.filterColumn) {
+        const useUniqueSymbolEncoding = SymbolFactory.shouldUseUniqueSymbolEncoding(currentSeriesConfig);
+
+        if (useUniqueSymbolEncoding) {
             const splitFilter = currentSeriesConfig.filterColumn.split('::');
             filterColumn = splitFilter[0]; // Assuming columnName is first part
+
+            if (!currentSeriesConfig.filterType) {
+                debugWarn('[ScatterChartRenderer.render] Legacy filter config detected (missing filterType). Applying unique symbol encoding fallback.');
+            }
 
             // Filter out empty values if requested
             if (currentSeriesConfig.excludeEmptyValues) {

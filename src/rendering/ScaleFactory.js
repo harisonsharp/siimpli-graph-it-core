@@ -204,7 +204,7 @@ export class ScaleFactory {
 
         const graphType = (config?.graphType || '').toLowerCase();
         if (graphType === 'histogram') {
-            return this.createHistogramScales(data, xAxisInfo, width, height);
+            return this.createHistogramScales(data, xAxisInfo, width, height, config);
         }
 
         if (!Array.isArray(seriesInfo) || seriesInfo.length === 0) {
@@ -225,8 +225,10 @@ export class ScaleFactory {
 
         let xScale;
         const scaleType = this.inferScaleType(xValues);
+        const staticXScale = this.getStaticScaleConfig(config, 'x');
         debugLog('ScaleFactory.createScalesForGraph', 'scaleType', scaleType);
         if (scaleType === 'time') {
+            // TODO: Support static scales for date-time axes.
             // Parse values to dates if they are strings
             const dateValues = xValues.map(v => v instanceof Date ? v : new Date(v))
                 .filter(d => !isNaN(d.getTime())); // Filter invalid dates
@@ -241,13 +243,16 @@ export class ScaleFactory {
                 xScale = this.createTimeScale(xExtent, [0, width]);
             }
         } else if (scaleType === 'band' || isCategorical) {
+            // TODO: Support static scales for categorical axes.
             // Create band scale for categorical/bar chart data
             const uniqueXValues = [...new Set(xValues)];
             xScale = this.createBandScale(uniqueXValues, [0, width], 0.5);
         } else {
             // Create linear scale for continuous data
             const xExtent = d3.extent(xValues, d => +d);
-            if (xExtent[0] === undefined || xExtent[1] === undefined || isNaN(xExtent[0]) || isNaN(xExtent[1])) {
+            if (staticXScale) {
+                xScale = this.createLinearScale([staticXScale.min, staticXScale.max], [0, width]);
+            } else if (xExtent[0] === undefined || xExtent[1] === undefined || isNaN(xExtent[0]) || isNaN(xExtent[1])) {
                 // Fallback to band if numeric fails
                 const uniqueXValues = [...new Set(xValues)];
                 xScale = this.createBandScale(uniqueXValues, [0, width], 0.5);
@@ -377,6 +382,12 @@ export class ScaleFactory {
             }
         }
 
+        const axisStaticScale = this.getStaticScaleConfig(config, axis === 'secondary' ? 'y2' : 'y');
+
+        if (axisStaticScale) {
+            return this.createLinearScale([axisStaticScale.min, axisStaticScale.max], [height, 0]);
+        }
+
         // Add visual padding to create space at top and bottom of chart
         // This provides better visual spacing and prevents data from touching edges
         // For bar charts or when minimum is non-negative, don't pad below 0
@@ -397,7 +408,7 @@ export class ScaleFactory {
      * @param {number} height - Graph height
      * @returns {Object} { xScale, yScale }
      */
-    static createHistogramScales(data, xAxisInfo, width, height) {
+    static createHistogramScales(data, xAxisInfo, width, height, config = {}) {
         const values = data
             .map(d => +d[xAxisInfo.columnName])
             .filter(v => !isNaN(v) && isFinite(v));
@@ -407,14 +418,22 @@ export class ScaleFactory {
         }
 
         const xExtent = d3.extent(values);
-        const xScale = this.createLinearScale(xExtent, [0, width]);
+        const staticXScale = this.getStaticScaleConfig(config, 'x');
+        const xDomain = staticXScale ? [staticXScale.min, staticXScale.max] : xExtent;
+        const xScale = this.createLinearScale(xDomain, [0, width]);
 
         const bins = generateCustomBins(values);
         const maxCount = bins.length > 0 ? d3.max(bins, bin => bin.values.length) : 1;
 
-        // Add padding to histogram Y scale for better visual spacing
-        const [paddedMin, paddedMax] = this.addDomainPadding(0, maxCount);
-        const yScale = this.createLinearScale([paddedMin, paddedMax], [height, 0]);
+        const staticYScale = this.getStaticScaleConfig(config, 'y');
+        let yDomain;
+        if (staticYScale) {
+            yDomain = [staticYScale.min, staticYScale.max];
+        } else {
+            // Add padding to histogram Y scale for better visual spacing
+            yDomain = this.addDomainPadding(0, maxCount);
+        }
+        const yScale = this.createLinearScale(yDomain, [height, 0]);
 
         return { xScale, yScale };
     }
@@ -537,5 +556,30 @@ export class ScaleFactory {
         }
 
         return 'linear';
+    }
+
+    /**
+     * Parse static numeric scale settings for a specific axis.
+     * Returns null when disabled or invalid.
+     */
+    static getStaticScaleConfig(config, axisKey) {
+        const axisScale = config?.staticScales?.[axisKey];
+        if (!axisScale || axisScale.enabled !== true) {
+            return null;
+        }
+
+        const min = Number.parseFloat(axisScale.min);
+        const max = Number.parseFloat(axisScale.max);
+        const step = Number.parseFloat(axisScale.step);
+
+        if (!Number.isFinite(min) || !Number.isFinite(max) || !Number.isFinite(step)) {
+            return null;
+        }
+
+        if (max <= min || step <= 0) {
+            return null;
+        }
+
+        return { min, max, step };
     }
 }

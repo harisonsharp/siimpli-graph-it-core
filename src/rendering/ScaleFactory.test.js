@@ -54,5 +54,48 @@ describe('ScaleFactory', () => {
             expect(xScale.domain()).toContain(true);
             expect(xScale.domain()).toContain(false);
         });
+
+        it('should apply static numeric x-axis scale when enabled', () => {
+            const data = [
+                { x: 1, y: 10 },
+                { x: 2, y: 20 },
+                { x: 3, y: 30 }
+            ];
+            const xAxisInfo = { columnName: 'x' };
+            const seriesInfo = [{ axisAssignment: 'primary', yAxisInfo: { columnName: 'y' }, graphType: 'line' }];
+            const config = {
+                graphType: 'line',
+                staticScales: {
+                    x: { enabled: true, min: 0, max: 10, step: 2 }
+                }
+            };
+
+            const { xScale } = ScaleFactory.createScalesForGraph(data, xAxisInfo, seriesInfo, 100, 100, config);
+            expect(xScale.domain()).toEqual([0, 10]);
+        });
+
+        it('should apply static numeric primary and secondary y-axis scales when enabled', () => {
+            const data = [
+                { x: 1, y1: 10, y2: 100 },
+                { x: 2, y1: 20, y2: 120 },
+                { x: 3, y1: 30, y2: 140 }
+            ];
+            const xAxisInfo = { columnName: 'x' };
+            const seriesInfo = [
+                { axisAssignment: 'primary', yAxisInfo: { columnName: 'y1' }, graphType: 'line' },
+                { axisAssignment: 'secondary', yAxisInfo: { columnName: 'y2' }, graphType: 'line' }
+            ];
+            const config = {
+                graphType: 'line',
+                staticScales: {
+                    y: { enabled: true, min: 0, max: 40, step: 10 },
+                    y2: { enabled: true, min: 80, max: 160, step: 20 }
+                }
+            };
+
+            const { yScale } = ScaleFactory.createScalesForGraph(data, xAxisInfo, seriesInfo, 100, 100, config);
+            expect(yScale.primary.domain()).toEqual([0, 40]);
+            expect(yScale.secondary.domain()).toEqual([80, 160]);
+        });
     });
 });

@@ -79,6 +79,32 @@ export class SymbolFactory {
         return [...new Set(data.map(d => d[filterColumn]))].filter(v => v !== undefined && v !== null);
     }
 
+    /**
+     * Determine whether scatter unique symbol encoding should be active.
+     * Supports legacy configs where filterType is omitted but filterColumn is provided.
+     *
+     * @param {Object} seriesConfig
+     * @returns {boolean}
+     */
+    static shouldUseUniqueSymbolEncoding(seriesConfig) {
+        if (!seriesConfig || !seriesConfig.filter || !seriesConfig.filterColumn) {
+            return false;
+        }
+
+        if (seriesConfig.filterType === 'unique') {
+            return true;
+        }
+
+        const hasFilterType = typeof seriesConfig.filterType === 'string' && seriesConfig.filterType.trim() !== '';
+        const hasFilterValue =
+            seriesConfig.filterValue !== undefined &&
+            seriesConfig.filterValue !== null &&
+            String(seriesConfig.filterValue).trim() !== '';
+
+        // Backward compatibility: old configs used filter + filterColumn without filterType.
+        return !hasFilterType && !hasFilterValue;
+    }
+
     static getSymbolMap(uniqueValues) {
         return SymbolFactory.generateSymbolMap(uniqueValues);
     }
