@@ -23,7 +23,6 @@
  * @relatedFiles ConfigContext.jsx, CurveFittingPanel.jsx - Imported by configuration and UI components
  */
 
-import { debugLog, debugWarn } from './utils/debug.js';
 
 export const GRAPH_CONFIG = {
     MARGINS: { top: 60, right: 150, bottom: 120, left: 80 },
@@ -100,6 +99,8 @@ export const DEFAULT_CURVE_FIT = {
     xMax: '',
     fitType: 'best_fit',
     order: 2,
+    customEquation: '',
+    confidenceBands: { enabled: false, bands: [] },
     result: null
 };
 

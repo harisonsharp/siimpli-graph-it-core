@@ -101,14 +101,14 @@ export class GraphCompositionRenderer {
                 if (series.graphType === 'histogram') return true;
                 const hasFileContext = yAxisInfo.fileName && d._sourceFile;
                 const isSameFile = !hasFileContext || d._sourceFile === yAxisInfo.fileName;
-                const columnExistsInRow = d.hasOwnProperty(yAxisInfo.columnName);
+                const columnExistsInRow = Object.hasOwn(d, yAxisInfo.columnName);
 
                 if (hasFileContext && !isSameFile && !columnExistsInRow) {
                     return false;
                 }
 
                 const yValue = d[yAxisInfo.columnName];
-                return yValue !== undefined && yValue !== null && yValue !== '' && !isNaN(parseNumber(yValue));
+                return yValue !== undefined && yValue !== null && yValue !== '' && !Number.isNaN(parseNumber(yValue));
             });
 
             if (seriesValidData.length === 0) {
@@ -132,7 +132,7 @@ export class GraphCompositionRenderer {
             const renderer = ChartRendererFactory.createRendererSafe(seriesGraphType);
             const seriesColor = seriesColorScale ? seriesColorScale(yAxisInfo.columnName) : null;
 
-            const targetIndex = graphConfig.colorGradingTarget !== undefined ? parseInt(graphConfig.colorGradingTarget) : 0;
+            const targetIndex = graphConfig.colorGradingTarget !== undefined ? parseInt(graphConfig.colorGradingTarget, 10) : 0;
             const globalIndex = graphConfig.series.findIndex(s => s.yAxis === series.yAxis && s.axisAssignment === series.axisAssignment);
 
             const useColorScale = (globalIndex === targetIndex) ? colorScale : null;
@@ -163,9 +163,9 @@ export class GraphCompositionRenderer {
     /**
      * Render contour lines from 3D data
      */
-    drawContours(g, svg, validData, contourInfo, xAxisInfo, yAxisInfo, xScale, yScale, globalSettings) {
+    drawContours(g, _svg, validData, contourInfo, xAxisInfo, yAxisInfo, xScale, yScale, _globalSettings) {
         const contourData = validData.filter(d =>
-            d[contourInfo.columnName] !== undefined && !isNaN(+d[contourInfo.columnName])
+            d[contourInfo.columnName] !== undefined && !Number.isNaN(+d[contourInfo.columnName])
         );
 
         if (contourData.length === 0) return;
@@ -189,7 +189,7 @@ export class GraphCompositionRenderer {
             .append("path")
             .attr("d", d => d3.geoPath()(d))
             .attr("fill", "none")
-            .attr("stroke", (d, i) => contourColorScale(i))
+            .attr("stroke", (_d, i) => contourColorScale(i))
             .attr("stroke-width", 1.5)
             .attr("stroke-opacity", 0.7);
 
@@ -199,10 +199,29 @@ export class GraphCompositionRenderer {
     /**
      * Render curve fit trend lines
      */
-    drawCurveFits(g, curveFits, xScale, yScale, width, seriesInfo = [], axisInfo = {}, dimensions = {}) {
+    drawCurveFits(g, curveFits, xScale, yScale, _width, seriesInfo = [], _axisInfo = {}, _dimensions = {}) {
         const isDualAxis = yScale && typeof yScale === 'object' && yScale.primary && yScale.secondary;
         const isMultiYScale = Array.isArray(yScale);
         const equationItems = [];
+
+        // Add a clip path to prevent curve fit paths from escaping the plot area.
+        // D3 linear/log scales produce valid pixel coordinates for out-of-domain values,
+        // so without clipping a curve can extend far outside the chart bounds.
+        const plotWidth = _dimensions.width || _width || 0;
+        const plotHeight = _dimensions.height || 0;
+        const clipId = `curve-fit-clip-${Math.random().toString(36).slice(2, 7)}`;
+        const svgDefs = g.node()?.ownerSVGElement
+            ? d3.select(g.node().ownerSVGElement).select('defs').empty()
+                ? d3.select(g.node().ownerSVGElement).append('defs')
+                : d3.select(g.node().ownerSVGElement).select('defs')
+            : null;
+        if (svgDefs && plotWidth > 0 && plotHeight > 0) {
+            svgDefs.append('clipPath')
+                .attr('id', clipId)
+                .append('rect')
+                .attr('x', 0).attr('y', 0)
+                .attr('width', plotWidth).attr('height', plotHeight);
+        }
 
         // Pre-compute rendering data for all curve fits
         const renderData = [];
@@ -239,10 +258,10 @@ export class GraphCompositionRenderer {
             let effectiveXScale = xScale;
             const isBandScale = typeof xScale.bandwidth === 'function';
             if (isBandScale) {
-                const numericXs = curveFit.result.curvePoints.map(p => +p.x).filter(v => !isNaN(v));
+                const numericXs = curveFit.result.curvePoints.map(p => +p.x).filter(v => !Number.isNaN(v));
                 const domainFromPoints = numericXs.length > 0 ? [Math.min(...numericXs), Math.max(...numericXs)] : null;
-                const xDomain = (xScale.domain && xScale.domain()) || [];
-                const numericDomain = xDomain.map(d => +d).filter(v => !isNaN(v));
+                const xDomain = xScale.domain?.() ?? [];
+                const numericDomain = xDomain.map(d => +d).filter(v => !Number.isNaN(v));
                 const domainToUse = domainFromPoints || (numericDomain.length > 0 ? [Math.min(...numericDomain), Math.max(...numericDomain)] : null);
 
                 if (domainToUse) {
@@ -258,8 +277,8 @@ export class GraphCompositionRenderer {
                     }
                     effectiveXScale = d3.scaleLinear().domain(domainToUse).range([rangeStart, rangeEnd]);
                 } else {
-                    let rangeStart = xScale.range ? xScale.range()[0] : 0;
-                    let rangeEnd = xScale.range ? xScale.range()[1] : curveFit.result.curvePoints.length - 1;
+                    const rangeStart = xScale.range ? xScale.range()[0] : 0;
+                    const rangeEnd = xScale.range ? xScale.range()[1] : curveFit.result.curvePoints.length - 1;
                     effectiveXScale = d3.scaleLinear().domain([0, curveFit.result.curvePoints.length - 1]).range([rangeStart, rangeEnd]);
                     debugWarn('Could not derive numeric x domain for band scale; using index-based mapping.');
                 }
@@ -269,23 +288,82 @@ export class GraphCompositionRenderer {
                 .curve(d3.curveBasis)
                 .x(d => {
                     const xValue = effectiveXScale(d.x);
-                    if (isNaN(xValue)) debugWarn(`Invalid x value for curve fit ${index}:`, d.x);
+                    if (Number.isNaN(xValue)) debugWarn(`Invalid x value for curve fit ${index}:`, d.x);
                     return xValue;
                 })
                 .y(d => {
                     const yValue = thisYScale(d.y);
-                    if (isNaN(yValue)) debugWarn(`Invalid y value for curve fit ${index}:`, d.y);
+                    if (Number.isNaN(yValue)) debugWarn(`Invalid y value for curve fit ${index}:`, d.y);
                     return yValue;
                 });
 
+            // Clamp points to both axis domains so the curve never escapes the plot area.
+            // D3 linear/log scales return valid (non-NaN) pixel values even for out-of-domain
+            // inputs, so a NaN check alone is insufficient — we must also check domain bounds.
+            const xDomainRaw = effectiveXScale.domain ? effectiveXScale.domain() : [];
+            const yDomainRaw = thisYScale.domain ? thisYScale.domain() : [];
+            const [xDomMin, xDomMax] = xDomainRaw.length === 2
+                ? [Math.min(...xDomainRaw), Math.max(...xDomainRaw)]
+                : [-Infinity, Infinity];
+            const [yDomMin, yDomMax] = yDomainRaw.length === 2
+                ? [Math.min(...yDomainRaw), Math.max(...yDomainRaw)]
+                : [-Infinity, Infinity];
+
             const validPoints = curveFit.result.curvePoints.filter(d => {
                 const xNum = +d.x;
-                return !isNaN(effectiveXScale(xNum)) && !isNaN(thisYScale(d.y));
+                // Clamp to x domain only — curves may extend beyond the y data range
+                // (e.g. with a static Y scale). Out-of-bounds y values are handled by
+                // the clipPath applied to the rendered paths above.
+                return Number.isFinite(xNum) &&
+                    Number.isFinite(d.y) &&
+                    !Number.isNaN(effectiveXScale(xNum)) &&
+                    !Number.isNaN(thisYScale(d.y)) &&
+                    xNum >= xDomMin && xNum <= xDomMax;
             });
 
             if (validPoints.length === 0) {
                 debugWarn(`No valid points for curve fit ${index}. Skipping.`);
                 return;
+            }
+
+            // Build confidence band area generators if bands exist
+            const bandRenderData = [];
+            const bands = curveFit.result.confidenceBands;
+            if (Array.isArray(bands) && bands.length > 0) {
+                bands.forEach((band, bandIdx) => {
+                    if (!band.upperBandPoints?.length || !band.lowerBandPoints?.length) return;
+
+                    // Pair upper/lower points by x-index for the area generator
+                    const n = Math.min(band.upperBandPoints.length, band.lowerBandPoints.length);
+                    const pairedPoints = Array.from({ length: n }, (_, i) => ({
+                        x: band.upperBandPoints[i].x,
+                        y1: band.upperBandPoints[i].y,
+                        y0: band.lowerBandPoints[i].y
+                    })).filter(p =>
+                        !Number.isNaN(effectiveXScale(p.x)) &&
+                        !Number.isNaN(thisYScale(p.y1)) &&
+                        !Number.isNaN(thisYScale(p.y0)) &&
+                        p.x >= xDomMin && p.x <= xDomMax &&
+                        p.y1 >= yDomMin && p.y1 <= yDomMax &&
+                        p.y0 >= yDomMin && p.y0 <= yDomMax
+                    );
+
+                    if (pairedPoints.length === 0) return;
+
+                    const area = d3.area()
+                        .curve(d3.curveBasis)
+                        .x(d => effectiveXScale(d.x))
+                        .y0(d => thisYScale(d.y0))
+                        .y1(d => thisYScale(d.y1));
+
+                    bandRenderData.push({
+                        points: pairedPoints,
+                        area,
+                        color: band.color || curveFit.color,
+                        bandIdx,
+                        curveIndex: index
+                    });
+                });
             }
 
             renderData.push({
@@ -295,10 +373,30 @@ export class GraphCompositionRenderer {
                 index,
                 equation: curveFit.result.equation,
                 rSquared: curveFit.result.rSquared,
-                seriesLabel
+                seriesLabel,
+                bandRenderData
             });
 
             debugLog(`Curve Fit ${index} Points:`, curveFit.result.curvePoints);
+        });
+
+        const clipAttr = svgDefs && plotWidth > 0 && plotHeight > 0 ? `url(#${clipId})` : null;
+
+        // Render confidence bands first (underneath the curve lines)
+        renderData.forEach(d => {
+            if (!d.bandRenderData?.length) return;
+            d.bandRenderData.forEach(band => {
+                const path = g.append("path")
+                    .attr("class", "curve-fit-band")
+                    .attr("fill", band.color)
+                    .attr("fill-opacity", 0.15)
+                    .attr("stroke", band.color)
+                    .attr("stroke-width", 1)
+                    .attr("stroke-opacity", 0.4)
+                    .attr("stroke-dasharray", "4,4")
+                    .attr("d", band.area(band.points));
+                if (clipAttr) path.attr("clip-path", clipAttr);
+            });
         });
 
         // Optimized: Use D3 data binding to render all curve fits at once
@@ -311,7 +409,8 @@ export class GraphCompositionRenderer {
             .attr("stroke", d => d.color)
             .attr("stroke-width", 3)
             .attr("stroke-dasharray", d => d.index === 0 ? "none" : "5,5")
-            .attr("d", d => d.line(d.points));
+            .attr("d", d => d.line(d.points))
+            .attr("clip-path", clipAttr ? clipAttr : null);
 
         // Build equation items from rendered data
         renderData.forEach(d => {
@@ -355,20 +454,20 @@ export class GraphCompositionRenderer {
             const legendWidth = Math.ceil(maxTextWidth + padding * 2 + swatchSize + textGap);
             const legendHeight = headerHeight + (legendItems.length * lineHeight) + padding * 2;
 
-            let numericHeight = Number(svgEl.getAttribute('height')) || svgEl.getBoundingClientRect?.()?.height || 0;
-            let numericWidth = Number(svgEl.getAttribute('width')) || svgEl.getBoundingClientRect?.()?.width || fallbackWidth;
+            let numericHeight = Number(svgEl.getAttribute('height')) || svgEl.getBoundingClientRect?.().height || 0;
+            const numericWidth = Number(svgEl.getAttribute('width')) || svgEl.getBoundingClientRect?.().width || fallbackWidth;
 
             if (numericHeight && legendHeight + 10 > numericHeight) {
-                try { svgSel.attr('height', Math.ceil(legendHeight + 10)); numericHeight = Math.ceil(legendHeight + 10); } catch (e) { /* ignore */ }
+                try { svgSel.attr('height', Math.ceil(legendHeight + 10)); numericHeight = Math.ceil(legendHeight + 10); } catch { /* ignore */ }
             }
 
             const legendX = Math.max(10, (numericWidth - legendWidth) / 2);
-            const marginBottom = (dimensions.margin && dimensions.margin.bottom) || 40;
+            const marginBottom = dimensions.margin?.bottom ?? 40;
             const axisBaseline = (axisInfo && typeof axisInfo.xAxisY === 'number') ? axisInfo.xAxisY : (numericHeight - marginBottom);
-            const legendY = axisBaseline + ((axisInfo && axisInfo.xAxisLabelOffset) || 50) + 8;
+            const legendY = axisBaseline + (axisInfo?.xAxisLabelOffset ?? 50) + 100;
 
             if (numericHeight && (legendY + legendHeight + 8) > numericHeight) {
-                try { svgSel.attr('height', Math.ceil(legendY + legendHeight + 12)); } catch (e) { /* ignore */ }
+                try { svgSel.attr('height', Math.ceil(legendY + legendHeight + 12)); } catch { /* ignore */ }
             }
 
             const legendGroup = svgSel.append('g').attr('class', 'curve-fit-legend');
@@ -391,7 +490,7 @@ export class GraphCompositionRenderer {
                 .enter()
                 .append('g')
                 .attr('class', 'legend-item')
-                .attr('transform', (d, i) => `translate(0,${padding + headerHeight + (i * lineHeight)})`);
+                .attr('transform', (_d, i) => `translate(${legendX},${padding + legendY + headerHeight + (i * lineHeight)})`);
 
             legendItemsGroup.append('rect')
                 .attr('x', padding).attr('y', 6 - swatchSize + 2)

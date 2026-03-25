@@ -23,7 +23,7 @@ export class ConfigValidator {
     static VALID_GRAPH_TYPES = ['scatter', 'line', 'histogram', 'bar'];
     static VALID_COLOR_SCHEMES = ['warm-cool', 'rainbow', 'green-red'];
     static VALID_AXIS_INTERCEPTS = ['minimum', 'origin', 'custom'];
-    static VALID_FIT_TYPES = ['polynomial', 'power_law', 'best_fit'];
+    static VALID_FIT_TYPES = ['polynomial', 'best_fit', 'custom'];
     static VALID_BAR_MODES = ['group', 'stack'];
 
     /**

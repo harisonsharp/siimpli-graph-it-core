@@ -1,5 +1,360 @@
 import { parseColumnId } from './columnUtils.js';
 import { debugLog, debugWarn } from './debug.js';
+
+// ---------------------------------------------------------------------------
+// Safe expression parser for user-entered equations
+// Supports: numbers, 'x', 'y', +, -, *, /, ^ (right-associative), parentheses
+// e.g. "30.65 * x^(0.2286)"  or  "y * 1.235"
+// ---------------------------------------------------------------------------
+
+/**
+ * Tokenise an infix expression string into an array of token objects.
+ * @param {string} src
+ * @returns {Array<{type: string, value: string|number}>}
+ */
+const tokenise = (src) => {
+    const tokens = [];
+    let i = 0;
+    while (i < src.length) {
+        const ch = src[i];
+        if (/\s/.test(ch)) { i++; continue; }
+        if (/[0-9.]/.test(ch)) {
+            let num = '';
+            while (i < src.length && /[0-9.eE+-]/.test(src[i])) {
+                // Allow 'e+' / 'e-' as part of scientific notation only after 'e'/'E'
+                if ((src[i] === '+' || src[i] === '-') && !/[eE]/.test(src[i - 1])) break;
+                num += src[i++];
+            }
+            tokens.push({ type: 'num', value: parseFloat(num) });
+        } else if (ch === 'x') {
+            tokens.push({ type: 'var', value: 'x' }); i++;
+        } else if (ch === 'y') {
+            tokens.push({ type: 'var', value: 'y' }); i++;
+        } else if ('+-*/^()'.includes(ch)) {
+            tokens.push({ type: 'op', value: ch }); i++;
+        } else {
+            throw new Error(`Unexpected character in equation: '${ch}'`);
+        }
+    }
+    return tokens;
+};
+
+/**
+ * Recursive-descent parser / evaluator.
+ * Returns a compiled function (x, y?) => number.
+ * Grammar (EBNF):
+ *   expr   = term   { ('+' | '-') term }
+ *   term   = power  { ('*' | '/') power }
+ *   power  = unary  [ '^' power ]          (right-associative)
+ *   unary  = '-' unary | primary
+ *   primary = number | 'x' | 'y' | '(' expr ')'
+ */
+const buildEvaluator = (tokens) => {
+    let pos = 0;
+
+    const peek = () => tokens[pos];
+    const consume = (val) => {
+        if (val !== undefined && tokens[pos]?.value !== val)
+            throw new Error(`Expected '${val}' but got '${tokens[pos]?.value}'`);
+        return tokens[pos++];
+    };
+
+    const parseExpr = () => {
+        let left = parseTerm();
+        while (peek()?.value === '+' || peek()?.value === '-') {
+            const op = consume().value;
+            const right = parseTerm();
+            const l = left; // closure capture
+            const r = right;
+            left = op === '+' ? (x, y) => l(x, y) + r(x, y) : (x, y) => l(x, y) - r(x, y);
+        }
+        return left;
+    };
+
+    const parseTerm = () => {
+        let left = parsePower();
+        while (peek()?.value === '*' || peek()?.value === '/') {
+            const op = consume().value;
+            const right = parsePower();
+            const l = left; const r = right;
+            left = op === '*' ? (x, y) => l(x, y) * r(x, y) : (x, y) => l(x, y) / r(x, y);
+        }
+        return left;
+    };
+
+    const parsePower = () => {
+        const base = parseUnary();
+        if (peek()?.value === '^') {
+            consume('^');
+            const exp = parsePower(); // right-associative
+            return (x, y) => base(x, y) ** exp(x, y);
+        }
+        return base;
+    };
+
+    const parseUnary = () => {
+        if (peek()?.value === '-') {
+            consume('-');
+            const operand = parseUnary();
+            return (x, y) => -operand(x, y);
+        }
+        return parsePrimary();
+    };
+
+    const parsePrimary = () => {
+        const t = peek();
+        if (!t) throw new Error('Unexpected end of expression');
+        if (t.type === 'num') { consume(); const v = t.value; return () => v; }
+        if (t.type === 'var' && t.value === 'x') { consume(); return (x) => x; }
+        if (t.type === 'var' && t.value === 'y') { consume(); return (_x, y) => y; }
+        if (t.value === '(') {
+            consume('(');
+            const inner = parseExpr();
+            consume(')');
+            return inner;
+        }
+        throw new Error(`Unexpected token: '${t.value}'`);
+    };
+
+    const fn = parseExpr();
+    if (pos !== tokens.length)
+        throw new Error(`Unexpected token at position ${pos}: '${tokens[pos]?.value}'`);
+    return fn;
+};
+
+/**
+ * Compile an equation string to an evaluator function (x, y?) => number.
+ * Throws a descriptive error if parsing fails.
+ * @param {string} equation - e.g. "30.65 * x^(0.2286)"
+ * @returns {Function}
+ */
+export const compileEquation = (equation) => {
+    if (!equation || typeof equation !== 'string') throw new Error('Equation must be a non-empty string');
+    const trimmed = equation.trim();
+    // Strip leading "y = " or "y=" prefix if present
+    const body = trimmed.replace(/^y\s*=\s*/i, '');
+    try {
+        return buildEvaluator(tokenise(body));
+    } catch (e) {
+        throw new Error(`Failed to parse equation "${body}": ${e.message}`);
+    }
+};
+
+/**
+ * Fit a user-supplied equation to data (no regression — equation is taken as-is).
+ * Returns rSquared so the user can assess quality.
+ * @param {Array<{x:number,y:number}>} data
+ * @param {string} equationStr - e.g. "30.65 * x^0.2286"
+ * @returns {{ coefficients: null, rSquared: number, equation: string, fitType: 'Custom', evaluator: Function }}
+ */
+export const fitCustomEquation = (data, equationStr) => {
+    const evaluator = compileEquation(equationStr);
+
+    const validData = data.filter(p =>
+        p && Number.isFinite(p.x) && Number.isFinite(p.y)
+    );
+    if (validData.length < 1) throw new Error('No valid data points for R² calculation');
+
+    // Collect only the points used in the fit (positive x, finite prediction)
+    // so that meanY and ssTot are computed over the same subset as ssRes.
+    const fittedPoints = validData
+        .filter(p => p.x > 0)
+        .map(p => ({ ...p, yPred: evaluator(p.x) }))
+        .filter(p => Number.isFinite(p.yPred));
+
+    if (fittedPoints.length < 1) throw new Error('No valid data points with x > 0 and finite prediction for R² calculation');
+
+    const meanY = fittedPoints.reduce((s, p) => s + p.y, 0) / fittedPoints.length;
+    let ssTot = 0, ssRes = 0;
+
+    for (const p of fittedPoints) {
+        ssTot += (p.y - meanY) ** 2;
+        ssRes += (p.y - p.yPred) ** 2;
+    }
+
+    const rSquared = ssTot === 0 ? 1 : Math.max(0, Math.min(1, 1 - ssRes / ssTot));
+    // Normalise stored equation to y = ... form
+    const normalised = equationStr.trim().replace(/^y\s*=\s*/i, '');
+
+    return {
+        coefficients: null,
+        evaluator,
+        rSquared,
+        equation: `y = ${normalised}`,
+        fitType: 'Custom',
+        dataPoints: validData.length
+    };
+};
+
+// ---------------------------------------------------------------------------
+// Confidence band utilities
+// ---------------------------------------------------------------------------
+
+/**
+ * Compute asymmetric residual standard deviations from a set of data points
+ * and a predictor function, returning separate upper/lower std values.
+ *
+ * Upper std = std of positive residuals (actual > predicted)
+ * Lower std = std of negative residuals (actual < predicted)
+ *
+ * @param {Array<{x:number,y:number}>} data
+ * @param {Function} predictor  (x) => yHat
+ * @returns {{ upperStd: number, lowerStd: number, n: number }}
+ */
+export const computeAsymmetricResidualStd = (data, predictor) => {
+    const posRes = [], negRes = [];
+    for (const p of data) {
+        const yHat = predictor(p.x);
+        if (!Number.isFinite(yHat)) continue;
+        const r = p.y - yHat;
+        if (r >= 0) posRes.push(r);
+        else negRes.push(r);
+    }
+
+    const stdOf = (arr) => {
+        if (arr.length === 0) return 0;
+        const mean = arr.reduce((s, v) => s + v, 0) / arr.length;
+        const variance = arr.reduce((s, v) => s + (v - mean) ** 2, 0) / arr.length;
+        return Math.sqrt(variance);
+    };
+
+    return {
+        upperStd: stdOf(posRes),
+        lowerStd: stdOf(negRes.map(Math.abs)),
+        n: posRes.length + negRes.length
+    };
+};
+
+/**
+ * Build a local-std function by binning raw residuals into x-quantile bins and
+ * then smoothing the per-bin std values with a Gaussian kernel.
+ *
+ * Each curve point gets its own upper/lower std estimate interpolated from the
+ * smoothed bin values, so the band width reflects the actual spread of data in
+ * that region rather than a single global constant.
+ *
+ * Smoothing prevents the jagged steps that would appear if raw bin boundaries
+ * were used directly.
+ *
+ * @param {Array<{x:number,y:number}>} data
+ * @param {Function} predictor  (x) => yHat
+ * @param {number}   nBins      number of quantile bins (default 8)
+ * @returns {{ upperStdAt: (x:number)=>number, lowerStdAt: (x:number)=>number }}
+ */
+const buildLocalStdFunctions = (data, predictor, nBins = 8) => {
+    const valid = data
+        .filter(p => Number.isFinite(p.x) && Number.isFinite(p.y) && Number.isFinite(predictor(p.x)))
+        .sort((a, b) => a.x - b.x);
+
+    if (valid.length < 4) {
+        // Fall back to global std when there is too little data to bin
+        const { upperStd, lowerStd } = computeAsymmetricResidualStd(valid, predictor);
+        return { upperStdAt: () => upperStd, lowerStdAt: () => lowerStd };
+    }
+
+    const actualBins = Math.min(nBins, Math.floor(valid.length / 2));
+    const binSize = Math.ceil(valid.length / actualBins);
+
+    // Collect bin centres and per-bin asymmetric std values
+    const centres = [], upperStds = [], lowerStds = [];
+    for (let b = 0; b < actualBins; b++) {
+        const slice = valid.slice(b * binSize, (b + 1) * binSize);
+        if (slice.length === 0) continue;
+        const { upperStd, lowerStd } = computeAsymmetricResidualStd(slice, predictor);
+        const cx = slice.reduce((s, p) => s + p.x, 0) / slice.length;
+        centres.push(cx);
+        upperStds.push(upperStd);
+        lowerStds.push(lowerStd);
+    }
+
+    // Gaussian kernel smoother: for query x, weighted average of bin values
+    // Bandwidth = half the total x-range, so all bins contribute meaningfully
+    const xMin = centres[0], xMax = centres[centres.length - 1];
+    const bandwidth = Math.max((xMax - xMin) * 0.5, 1e-10);
+
+    const gaussianSmooth = (stds, queryX) => {
+        let wSum = 0, vSum = 0;
+        for (let i = 0; i < centres.length; i++) {
+            const u = (queryX - centres[i]) / bandwidth;
+            const w = Math.exp(-0.5 * u * u);
+            wSum += w;
+            vSum += w * stds[i];
+        }
+        return wSum > 0 ? vSum / wSum : stds[0];
+    };
+
+    return {
+        upperStdAt: (x) => gaussianSmooth(upperStds, x),
+        lowerStdAt: (x) => gaussianSmooth(lowerStds, x),
+    };
+};
+
+/**
+ * Generate upper and lower confidence band curve points for a fitted curve.
+ *
+ * Three band modes:
+ *  - 'stddev':       bands at ±N global standard deviations of residuals (asymmetric)
+ *  - 'local_stddev': bands at ±N local standard deviations, varying along x (tapers with data)
+ *  - 'expression':   bands defined by user-entered offset expressions referencing 'y'
+ *
+ * @param {Array<{x:number,y:number}>} mainPoints  - already-generated main curve points
+ * @param {Array<{x:number,y:number}>} rawData     - original scatter data for stddev modes
+ * @param {Function} predictor                      - (x) => y for the main curve
+ * @param {Object}   bandConfig
+ * @param {string}   bandConfig.mode               - 'stddev' | 'local_stddev' | 'expression'
+ * @param {number}   [bandConfig.nStdDev]          - number of std deviations (stddev modes)
+ * @param {number}   [bandConfig.nBins]            - number of x-quantile bins (local_stddev mode, default 8)
+ * @param {string}   [bandConfig.upperExpr]        - e.g. "y * 1.235"  (expression mode)
+ * @param {string}   [bandConfig.lowerExpr]        - e.g. "y * 0.793"  (expression mode)
+ * @returns {{ upperBandPoints: Array, lowerBandPoints: Array, upperStdPct: number|null, lowerStdPct: number|null }}
+ */
+export const generateConfidenceBandPoints = (mainPoints, rawData, predictor, bandConfig) => {
+    const { mode, nStdDev, nBins, upperExpr, lowerExpr } = bandConfig;
+
+    let upperOffset, lowerOffset;
+
+    if (mode === 'stddev') {
+        const n = typeof nStdDev === 'number' && isFinite(nStdDev) ? nStdDev : 1;
+        const { upperStd, lowerStd } = computeAsymmetricResidualStd(rawData, predictor);
+        upperOffset = (_x, y) => y + n * upperStd;
+        lowerOffset = (_x, y) => y - n * lowerStd;
+    } else if (mode === 'local_stddev') {
+        const n = typeof nStdDev === 'number' && isFinite(nStdDev) ? nStdDev : 1;
+        const bins = typeof nBins === 'number' && nBins >= 2 ? Math.round(nBins) : 8;
+        const { upperStdAt, lowerStdAt } = buildLocalStdFunctions(rawData, predictor, bins);
+        upperOffset = (x, y) => y + n * upperStdAt(x);
+        lowerOffset = (x, y) => y - n * lowerStdAt(x);
+    } else if (mode === 'expression') {
+        const upperFn = upperExpr ? compileEquation(upperExpr) : null;
+        const lowerFn = lowerExpr ? compileEquation(lowerExpr) : null;
+        upperOffset = upperFn ? (x, y) => upperFn(x, y) : (_x, y) => y;
+        lowerOffset = lowerFn ? (x, y) => lowerFn(x, y) : (_x, y) => y;
+    } else {
+        throw new Error(`Unknown band mode: ${mode}`);
+    }
+
+    const upperBandPoints = mainPoints
+        .map(p => { const v = upperOffset(p.x, p.y); return Number.isFinite(v) ? { x: p.x, y: v } : null; })
+        .filter(Boolean);
+
+    const lowerBandPoints = mainPoints
+        .map(p => { const v = lowerOffset(p.x, p.y); return Number.isFinite(v) ? { x: p.x, y: v } : null; })
+        .filter(Boolean);
+
+    // Compute percentage std deviations relative to the mean y of main curve
+    // (for display in the result panel — mirrors the example: "Upper std = 23.5 %")
+    let upperStdPct = null, lowerStdPct = null;
+    if ((mode === 'stddev' || mode === 'local_stddev') && rawData.length > 0) {
+        const { upperStd, lowerStd } = computeAsymmetricResidualStd(rawData, predictor);
+        const meanYhat = mainPoints.reduce((s, p) => s + p.y, 0) / (mainPoints.length || 1);
+        if (Number.isFinite(meanYhat) && meanYhat !== 0) {
+            upperStdPct = (upperStd / meanYhat) * 100;
+            lowerStdPct = (lowerStd / meanYhat) * 100;
+        }
+    }
+
+    return { upperBandPoints, lowerBandPoints, upperStdPct, lowerStdPct };
+};
 /**
  * @fileoverview Mathematical utilities for curve fitting algorithms and statistical analysis.
  * Implements polynomial regression, power law fitting, and Gaussian elimination with robust error handling and numerical stability.
@@ -41,11 +396,11 @@ export const gaussianElimination = (matrix, vector) => {
             throw new Error('Matrix must be square');
         }
         for (let j = 0; j < n; j++) {
-            if (!isFinite(matrix[i][j])) {
+            if (!Number.isFinite(matrix[i][j])) {
                 throw new Error('Matrix contains invalid values');
             }
         }
-        if (!isFinite(vector[i])) {
+        if (!Number.isFinite(vector[i])) {
             throw new Error('Vector contains invalid values');
         }
     }
@@ -82,7 +437,7 @@ export const gaussianElimination = (matrix, vector) => {
             }
 
             const factor = workMatrix[j][i] / workMatrix[i][i];
-            if (!isFinite(factor)) {
+            if (!Number.isFinite(factor)) {
                 throw new Error('Numerical instability detected');
             }
 
@@ -106,7 +461,7 @@ export const gaussianElimination = (matrix, vector) => {
         }
         solution[i] /= workMatrix[i][i];
 
-        if (!isFinite(solution[i])) {
+        if (!Number.isFinite(solution[i])) {
             throw new Error('Solution contains invalid values');
         }
     }
@@ -132,8 +487,8 @@ export const fitPolynomial = (data, order) => {
         return point &&
             typeof point.x === 'number' &&
             typeof point.y === 'number' &&
-            isFinite(point.x) &&
-            isFinite(point.y);
+            Number.isFinite(point.x) &&
+            Number.isFinite(point.y);
     });
 
     if (validData.length < data.length) {
@@ -173,8 +528,8 @@ export const fitPolynomial = (data, order) => {
         for (let i = 0; i < n; i++) {
             for (let j = 0; j < n; j++) {
                 for (const point of normalizedData) {
-                    const powerSum = Math.pow(point.x, i + j);
-                    if (!isFinite(powerSum)) {
+                    const powerSum = point.x ** (i + j);
+                    if (!Number.isFinite(powerSum)) {
                         throw new Error('Numerical overflow in matrix construction');
                     }
                     matrix[i][j] += powerSum;
@@ -182,8 +537,8 @@ export const fitPolynomial = (data, order) => {
             }
 
             for (const point of normalizedData) {
-                const term = point.y * Math.pow(point.x, i);
-                if (!isFinite(term)) {
+                const term = point.y * point.x ** i;
+                if (!Number.isFinite(term)) {
                     throw new Error('Numerical overflow in vector construction');
                 }
                 vector[i] += term;
@@ -196,7 +551,7 @@ export const fitPolynomial = (data, order) => {
     // Check condition number (rough estimate)
     const diagonalProduct = matrix.reduce((prod, row, i) => prod * Math.abs(row[i]), 1);
     const matrixNorm = Math.max(...matrix.flat().map(Math.abs));
-    const conditionEstimate = Math.pow(matrixNorm, n) / Math.abs(diagonalProduct);
+    const conditionEstimate = matrixNorm ** n / Math.abs(diagonalProduct);
 
     if (conditionEstimate > 1e12) {
         debugWarn(`Matrix is poorly conditioned (est. condition number: ${conditionEstimate.toExponential(2)}). Results may be unreliable.`);
@@ -221,11 +576,11 @@ export const fitPolynomial = (data, order) => {
     for (let i = 0; i < n; i++) {
         for (let j = i; j < n; j++) {
             // Binomial coefficient for (x - xMean)^j expansion
-            let binomialTerm = normalizedCoefficients[j];
+            const binomialTerm = normalizedCoefficients[j];
             for (let k = 0; k <= j; k++) {
                 if (k === i) {
                     const binomialCoef = binomial(j, k);
-                    const scaleFactor = Math.pow(-xMean / xScale, j - k) * Math.pow(1 / xScale, k);
+                    const scaleFactor = (-xMean / xScale) ** (j - k) * (1 / xScale) ** k;
                     coefficients[i] += binomialTerm * binomialCoef * scaleFactor * yScale;
                 }
             }
@@ -242,15 +597,15 @@ export const fitPolynomial = (data, order) => {
 
     for (const point of validData) {
         const yPred = coefficients.reduce((sum, coef, i) => {
-            const term = coef * Math.pow(point.x, i);
-            if (!isFinite(term)) {
+            const term = coef * point.x ** i;
+            if (!Number.isFinite(term)) {
                 throw new Error('Numerical instability in prediction');
             }
             return sum + term;
         }, 0);
 
-        ssTot += Math.pow(point.y - meanY, 2);
-        ssRes += Math.pow(point.y - yPred, 2);
+        ssTot += (point.y - meanY) ** 2;
+        ssRes += (point.y - yPred) ** 2;
     }
 
     const rSquared = ssTot === 0 ? 1 : Math.max(0, Math.min(1, 1 - (ssRes / ssTot)));
@@ -322,8 +677,8 @@ export const fitPowerLaw = (data) => {
         typeof p.y === 'number' &&
         p.x > 0 &&
         p.y > 0 &&
-        isFinite(p.x) &&
-        isFinite(p.y)
+        Number.isFinite(p.x) &&
+        Number.isFinite(p.y)
     );
 
     if (validData.length < 2) {
@@ -338,7 +693,7 @@ export const fitPowerLaw = (data) => {
 
         // Validate log data
         for (const point of logData) {
-            if (!isFinite(point.x) || !isFinite(point.y)) {
+            if (!Number.isFinite(point.x) || !Number.isFinite(point.y)) {
                 throw new Error('Logarithm produced invalid values');
             }
         }
@@ -357,14 +712,14 @@ export const fitPowerLaw = (data) => {
         const slope = (n * sumXY - sumX * sumY) / denominator;
         const intercept = (sumY - slope * sumX) / n;
 
-        if (!isFinite(slope) || !isFinite(intercept)) {
+        if (!Number.isFinite(slope) || !Number.isFinite(intercept)) {
             throw new Error('Power law fit produced invalid coefficients');
         }
 
         const a = Math.exp(intercept);
         const power = slope;
 
-        if (!isFinite(a) || a <= 0) {
+        if (!Number.isFinite(a) || a <= 0) {
             throw new Error('Power law coefficient is invalid');
         }
 
@@ -374,12 +729,12 @@ export const fitPowerLaw = (data) => {
         let ssRes = 0;
 
         for (const point of validData) {
-            const yPred = a * Math.pow(point.x, power);
-            if (!isFinite(yPred)) {
+            const yPred = a * point.x ** power;
+            if (!Number.isFinite(yPred)) {
                 throw new Error('Power law prediction produced invalid values');
             }
-            ssTot += Math.pow(point.y - meanY, 2);
-            ssRes += Math.pow(point.y - yPred, 2);
+            ssTot += (point.y - meanY) ** 2;
+            ssRes += (point.y - yPred) ** 2;
         }
 
         const rSquared = ssTot === 0 ? 1 : Math.max(0, Math.min(1, 1 - (ssRes / ssTot)));
@@ -454,11 +809,11 @@ export const findBestFit = (data) => {
 };
 
 export const generateCurvePoints = (fit, xMin, xMax, numPoints = 100) => {
-    if (!fit || !fit.coefficients) {
+    if (!fit || (!fit.coefficients && fit.fitType !== 'Custom')) {
         throw new Error('Invalid fit object');
     }
 
-    if (!isFinite(xMin) || !isFinite(xMax) || xMin >= xMax) {
+    if (!Number.isFinite(xMin) || !Number.isFinite(xMax) || xMin >= xMax) {
         throw new Error('Invalid x range for curve generation');
     }
 
@@ -470,10 +825,14 @@ export const generateCurvePoints = (fit, xMin, xMax, numPoints = 100) => {
         let y;
 
         try {
-            if (fit.fitType.includes('Polynomial')) {
+            if (fit.fitType === 'Custom') {
+                if (!fit.evaluator) throw new Error('Custom fit has no evaluator');
+                if (x <= 0) continue; // Skip non-positive x — power-law-style expressions are undefined/degenerate at x≤0
+                y = fit.evaluator(x);
+            } else if (fit.fitType.includes('Polynomial')) {
                 y = fit.coefficients.reduce((sum, coef, j) => {
-                    const term = coef * Math.pow(x, j);
-                    if (!isFinite(term)) {
+                    const term = coef * x ** j;
+                    if (!Number.isFinite(term)) {
                         throw new Error(`Invalid term at x=${x}, power=${j}`);
                     }
                     return sum + term;
@@ -483,12 +842,12 @@ export const generateCurvePoints = (fit, xMin, xMax, numPoints = 100) => {
                 if (x <= 0 && power % 1 !== 0) {
                     continue; // Skip negative x for non-integer powers
                 }
-                y = a * Math.pow(x, power);
+                y = a * x ** power;
             } else {
                 throw new Error(`Unknown fit type: ${fit.fitType}`);
             }
 
-            if (isFinite(y)) {
+            if (Number.isFinite(y)) {
                 points.push({ x, y });
             }
         } catch (error) {
@@ -539,7 +898,7 @@ export const performCurveFitting = (csvData, config, curveFits) => {
     debugLog('Filtering X-axis data...');
     const validXData = csvData.filter(d => {
         const hasXData = d && d[xAxisInfo.columnName] !== undefined && d[xAxisInfo.columnName] !== null;
-        const xIsNumeric = hasXData && !isNaN(+d[xAxisInfo.columnName]) && isFinite(+d[xAxisInfo.columnName]);
+        const xIsNumeric = hasXData && !Number.isNaN(+d[xAxisInfo.columnName]) && Number.isFinite(+d[xAxisInfo.columnName]);
         return hasXData && xIsNumeric;
     });
 
@@ -549,6 +908,11 @@ export const performCurveFitting = (csvData, config, curveFits) => {
         debugWarn('Insufficient valid X-axis data points for curve fitting:', validXData.length);
         return curveFits.map(fit => ({ ...fit, result: null }));
     }
+
+    // Compute data-wide x extent for fallback when user leaves xMin/xMax blank
+    const allXValues = validXData.map(d => +d[xAxisInfo.columnName]);
+    const dataXMin = Math.min(...allXValues);
+    const dataXMax = Math.max(...allXValues);
 
     // Process each curve fit independently
     return curveFits.map((curveFit, index) => {
@@ -577,7 +941,7 @@ export const performCurveFitting = (csvData, config, curveFits) => {
                 return false;
             }
             const hasYData = d && d[yAxisInfo.columnName] !== undefined && d[yAxisInfo.columnName] !== null;
-            const yIsNumeric = hasYData && !isNaN(+d[yAxisInfo.columnName]) && isFinite(+d[yAxisInfo.columnName]);
+            const yIsNumeric = hasYData && !Number.isNaN(+d[yAxisInfo.columnName]) && Number.isFinite(+d[yAxisInfo.columnName]);
             return hasYData && yIsNumeric;
         }).map(d => ({
             x: +d[xAxisInfo.columnName],
@@ -589,17 +953,20 @@ export const performCurveFitting = (csvData, config, curveFits) => {
             return { ...curveFit, result: null };
         }
 
-        const xMin = parseFloat(curveFit.xMin);
-        const xMax = parseFloat(curveFit.xMax);
+        // Fall back to data extent when the user leaves min/max blank
+        const parsedXMin = parseFloat(curveFit.xMin);
+        const parsedXMax = parseFloat(curveFit.xMax);
+        const xMin = Number.isFinite(parsedXMin) ? parsedXMin : dataXMin;
+        const xMax = Number.isFinite(parsedXMax) ? parsedXMax : dataXMax;
 
-        if (!isFinite(xMin) || !isFinite(xMax) || xMin >= xMax) {
+        if (!Number.isFinite(xMin) || !Number.isFinite(xMax) || xMin >= xMax) {
             debugWarn(`Invalid range for curve fit ${index + 1}: [${xMin}, ${xMax}]`);
             return { ...curveFit, result: null };
         }
 
         // Filter data for this specific range
         const rangeData = validData.filter(d => d.x >= xMin && d.x <= xMax);
-        console.log(`Curve fit ${index + 1}: ${rangeData.length} points in range [${xMin}, ${xMax}]`, rangeData);
+        debugLog(`Curve fit ${index + 1}: ${rangeData.length} points in range [${xMin}, ${xMax}]`);
 
         if (rangeData.length < 3) {
             debugWarn(`Insufficient data points in range [${xMin}, ${xMax}] for curve fit ${index + 1}: ${rangeData.length} points`);
@@ -610,15 +977,15 @@ export const performCurveFitting = (csvData, config, curveFits) => {
             let fitResult;
 
             switch (curveFit.fitType) {
-                case 'polynomial':
-                    const order = parseInt(curveFit.order) || 2;
+                case 'polynomial': {
+                    const order = parseInt(curveFit.order, 10) || 2;
                     if (rangeData.length <= order) {
                         debugWarn(`Not enough points (${rangeData.length}) for polynomial order ${order}`);
                         return { ...curveFit, result: null };
                     }
                     fitResult = fitPolynomial(rangeData, order);
                     break;
-
+                }
                 case 'power_law':
                     fitResult = fitPowerLaw(rangeData);
                     break;
@@ -627,12 +994,44 @@ export const performCurveFitting = (csvData, config, curveFits) => {
                     fitResult = findBestFit(rangeData);
                     break;
 
+                case 'custom': {
+                    if (!curveFit.customEquation || !curveFit.customEquation.trim()) {
+                        debugWarn(`Curve fit ${index + 1}: custom type requires an equation`);
+                        return { ...curveFit, result: null };
+                    }
+                    fitResult = fitCustomEquation(rangeData, curveFit.customEquation);
+                    break;
+                }
                 default:
                     throw new Error(`Unknown fit type: ${curveFit.fitType}`);
             }
 
             // Generate curve points for visualization
             const curvePoints = generateCurvePoints(fitResult, xMin, xMax);
+
+            // Build a predictor function for band calculations
+            const predictor = fitResult.fitType === 'Custom'
+                ? fitResult.evaluator
+                : fitResult.fitType.includes('Polynomial')
+                    ? (x) => fitResult.coefficients.reduce((s, c, j) => s + c * x ** j, 0)
+                    : (x) => fitResult.coefficients[0] * x ** fitResult.coefficients[1];
+
+            // Generate confidence bands if configured
+            let confidenceBands = null;
+            if (curveFit.confidenceBands?.enabled && curveFit.confidenceBands?.bands?.length > 0) {
+                confidenceBands = curveFit.confidenceBands.bands.map((band, bandIdx) => {
+                    try {
+                        return {
+                            ...generateConfidenceBandPoints(curvePoints, rangeData, predictor, band),
+                            color: band.color || curveFit.color,
+                            label: band.label || `Band ${bandIdx + 1}`
+                        };
+                    } catch (e) {
+                        debugWarn(`Confidence band ${bandIdx + 1} for curve ${index + 1} failed: ${e.message}`);
+                        return null;
+                    }
+                }).filter(Boolean);
+            }
 
             debugLog(`Successfully fitted curve ${index + 1}:`, fitResult);
 
@@ -641,6 +1040,7 @@ export const performCurveFitting = (csvData, config, curveFits) => {
                 result: {
                     ...fitResult,
                     curvePoints,
+                    confidenceBands,
                     xMin,
                     xMax
                 }
@@ -670,12 +1070,14 @@ export const parseCurveFits = (config) => {
     return config.curveFits.map((fit, i) => {
         const colors = ['#ff6b6b', '#4ecdc4', '#45b7d1', '#96ceb4', '#ffeaa7', '#dda0dd'];
         return {
-            enabled: !!(fit && fit.enabled),
-            seriesIndex: parseInt(fit?.seriesIndex) ?? 0,
+            enabled: !!fit?.enabled,
+            seriesIndex: parseInt(fit?.seriesIndex, 10) ?? 0,
             xMin: fit?.xMin ?? '',
             xMax: fit?.xMax ?? '',
             fitType: fit?.fitType ?? 'polynomial',
-            order: parseInt(fit?.order) || 2,
+            order: parseInt(fit?.order, 10) || 2,
+            customEquation: fit?.customEquation ?? '',
+            confidenceBands: fit?.confidenceBands ?? { enabled: false, bands: [] },
             color: fit?.color ?? colors[i % colors.length],
             result: null
         };

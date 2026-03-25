@@ -309,13 +309,13 @@ function renderLegends(svg, validData, scales, columnInfo, config, dimensions, s
             svg, contour.contourInfo, contour.thresholds, contour.colorScale, settings.graphDimensions
         );
     }
-
-    if (curve && Array.isArray(curve.legendItems) && curve.legendItems.length > 0) {
-        const fallbackWidth = (dimensions.width || 0) + (margin.left + margin.right);
-        graphService?.renderCurveFitLegend?.(
-            svg, curve.legendItems, axisInfo, dimensions, fallbackWidth
-        );
-    }
+    // FIXME: uncomment these lines for curve fitting legend
+    // if (curve && Array.isArray(curve.legendItems) && curve.legendItems.length > 0) {
+    //     const fallbackWidth = (dimensions.width || 0) + (margin.left + margin.right);
+    //     graphService?.renderCurveFitLegend?.(
+    //         svg, curve.legendItems, axisInfo, dimensions, fallbackWidth
+    //     );
+    // }
 }
 
 /**
@@ -373,7 +373,7 @@ export function renderGraph({
         svg.attr('height', totalHeight);
         svg.attr('viewBox', null);
 
-        let targetGraphConfig = { ...graphConfig };
+        let targetGraphConfig = { ...graphConfig, _isBatchMode: isBatchMode };
         let additionalJoinCols = targetGraphConfig.joinColumns || [];
         if (additionalJoinCols.length === 0 && targetGraphConfig.xAxis2) {
             additionalJoinCols = [targetGraphConfig.xAxis2];

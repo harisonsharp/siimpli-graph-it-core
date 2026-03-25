@@ -58,8 +58,9 @@ export class ScatterChartRenderer extends BaseChartRenderer {
      * @param {d3.Scale} colorScale - Optional color scale
      * @param {Object} colorInfo - Optional color column info
      * @param {string} seriesColor - Optional series color
+     * @param {Object} seriesConfig - The specific series configuration object for this render call
      */
-    render(g, data, scales, xAxisInfo, yAxisInfo, config, colorScale = null, colorInfo = null, seriesColor = null) {
+    render(g, data, scales, xAxisInfo, yAxisInfo, config, colorScale = null, colorInfo = null, seriesColor = null, seriesConfig = null) {
         this.validateRenderParams(g, data, scales);
         const { xScale, yScale } = scales;
         let validData = this.filterValidData(data, xAxisInfo, yAxisInfo);
@@ -69,8 +70,9 @@ export class ScatterChartRenderer extends BaseChartRenderer {
             return;
         }
 
-        // Get series configuration for this specific series
-        const currentSeriesConfig = config.series.find(s => {
+        // Use the directly-passed series config when available; fall back to a find() only for
+        // legacy callers that do not supply the argument.
+        const currentSeriesConfig = seriesConfig ?? config.series.find(s => {
             const split = s.yAxis.split('::');
             return split[0] === yAxisInfo.columnName && (split[1] === undefined || split[1] === yAxisInfo.fileName);
         });
@@ -120,36 +122,57 @@ export class ScatterChartRenderer extends BaseChartRenderer {
         // D3 symbol size is area in square pixels
         const symbolArea = Math.PI * Math.pow(parseFloat(finalRadius || this.radius), 2);
 
-        // Render points
-        g.selectAll('.dot')
+        // Pre-compute per-point values into parallel arrays.
+        // This moves all parseNumber / scale / color calls out of D3's attribute phase,
+        // where they would be called inside closures that D3 invokes one-at-a-time with
+        // repeated property lookups. A single typed pass is faster and more cache-friendly.
+        const isBatchMode = config._isBatchMode === true;
+        const yColName = yAxisInfo.columnName;
+        const n = validData.length;
+        const transforms = new Array(n);
+        const fills = new Array(n);
+        const symbolPaths = new Array(n);
+
+        // Hoist d3.symbol generator — creating it once avoids N object allocations
+        const symbolGen = d3.symbol().size(symbolArea);
+
+        for (let i = 0; i < n; i++) {
+            const d = validData[i];
+            const symType = (symbolMap && filterColumn)
+                ? SymbolFactory.getSymbol(d[filterColumn], symbolMap)
+                : d3.symbolCircle;
+            symbolPaths[i] = symbolGen.type(symType)();
+            transforms[i] = `translate(${getXPosition(d)},${yScale(parseNumber(d[yColName]))})`;
+            fills[i] = this.getPointColor(d, colorScale, colorInfo, config, seriesColor);
+        }
+
+        // Render points — attribute callbacks now just index into pre-computed arrays
+        const dots = g.selectAll('.dot')
             .data(validData)
             .enter()
-            .append('path') // Changed from circle to path
+            .append('path')
             .attr('class', 'dot')
-            .attr('d', d3.symbol()
-                .type(d => {
-                    if (symbolMap && filterColumn) {
-                        return SymbolFactory.getSymbol(d[filterColumn], symbolMap);
-                    }
-                    return d3.symbolCircle;
-                })
-                .size(symbolArea)
-            )
-            .attr('transform', d => `translate(${getXPosition(d)},${yScale(parseNumber(d[yAxisInfo.columnName]))})`)
-            .style('fill', d => this.getPointColor(d, colorScale, colorInfo, config, seriesColor))
+            .attr('d', (_d, i) => symbolPaths[i])
+            .attr('transform', (_d, i) => transforms[i])
+            .style('fill', (_d, i) => fills[i])
             .style('opacity', this.opacity)
             .style('stroke', '#000')
-            .style('stroke-width', 0.5)
-            .append('title') // Add tooltip
-            .text(d => {
-                let text = `${xAxisInfo.columnName}: ${d[xAxisInfo.columnName]}\n${yAxisInfo.columnName}: ${d[yAxisInfo.columnName]}`;
-                if (filterColumn) {
-                    text += `\n${filterColumn}: ${d[filterColumn]}`;
-                }
-                return text;
-            });
+            .style('stroke-width', 0.5);
 
-        console.log('Scatter chart rendered successfully', g.selectAll('.dot').data().length);
+        // Skip <title> tooltip nodes in headless/batch mode — they add 10k DOM nodes
+        // that only work in interactive SVG and are ignored by the PNG rasterizer.
+        if (!isBatchMode) {
+            dots.append('title')
+                .text(d => {
+                    let text = `${xAxisInfo.columnName}: ${d[xAxisInfo.columnName]}\n${yColName}: ${d[yColName]}`;
+                    if (filterColumn) {
+                        text += `\n${filterColumn}: ${d[filterColumn]}`;
+                    }
+                    return text;
+                });
+        }
+
+        console.log('Scatter chart rendered successfully', n);
     }
 
     /**
