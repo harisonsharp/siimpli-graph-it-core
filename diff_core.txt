@@ -10,7 +10,7 @@ index 9eeeb0c..04075a0 100644
 +
  export const GRAPH_CONFIG = {
      MARGINS: { top: 60, right: 150, bottom: 120, left: 80 },
-     GRID_SIZE: 200,
+     GRID_SIZE: 200, 
 diff --git a/src/core/validation/ConfigValidator.js b/src/core/validation/ConfigValidator.js
 index c0b07bb..f8ec2ab 100644
 --- a/src/core/validation/ConfigValidator.js
