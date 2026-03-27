@@ -15,7 +15,7 @@
  *
  * @exports calculateAxisIntercepts, drawAxes
  *
- * @example
+ * @example 
  * const intercepts = calculateAxisIntercepts([0, 100], [0, 50], config);
  * drawAxes(g, xScale, yScale, intercepts, labels, dimensions);
  *
