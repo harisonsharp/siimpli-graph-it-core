@@ -57,7 +57,7 @@ export class BarChartRenderer extends BaseChartRenderer {
      * @param {Object} config - Graph configuration
      * @param {d3.Scale} seriesColorScale - Color scale for series
      */
-    render(g, data, scales, xAxisInfo, seriesInfo, config, seriesColorScale) {
+    render(g, data, scales, xAxisInfo, seriesInfo, config, seriesColorScale, gradingMap = null) {
         this.validateRenderParams(g, data, scales);
 
         if (!Array.isArray(seriesInfo) || seriesInfo.length === 0) {
@@ -67,9 +67,9 @@ export class BarChartRenderer extends BaseChartRenderer {
         const mode = config.barMode || this.mode;
         debugLog(`Rendering bar chart in ${mode} mode`);
         if (mode === 'stack') {
-            this.renderStackedBars(g, data, scales, xAxisInfo, seriesInfo, seriesColorScale);
+            this.renderStackedBars(g, data, scales, xAxisInfo, seriesInfo, seriesColorScale, gradingMap);
         } else if (mode === 'group') {
-            this.renderGroupedBars(g, data, scales, xAxisInfo, seriesInfo, seriesColorScale);
+            this.renderGroupedBars(g, data, scales, xAxisInfo, seriesInfo, seriesColorScale, gradingMap);
         } else if (mode === 'stack-proportional') {
             this.renderProportionalStackedBars(g, data, scales, xAxisInfo, seriesInfo, seriesColorScale);
         } else {
@@ -86,7 +86,7 @@ export class BarChartRenderer extends BaseChartRenderer {
      * @param {Array<Object>} seriesInfo - Series configurations
      * @param {d3.Scale} seriesColorScale - Color scale for series
      */
-    renderGroupedBars(g, data, scales, xAxisInfo, seriesInfo, seriesColorScale) {
+    renderGroupedBars(g, data, scales, xAxisInfo, seriesInfo, seriesColorScale, gradingMap = null) {
         const { xScale, yScale } = scales;
 
         // Determine bandwidth and positioning function
@@ -141,7 +141,8 @@ export class BarChartRenderer extends BaseChartRenderer {
                 return {
                     key: s.yAxisInfo.columnName,
                     value: hasValue ? Number(rawValue) : null,
-                    hasValue: hasValue
+                    hasValue: hasValue,
+                    _row: d
                 };
             }).filter(item => item.hasValue)) // Only render bars for valid values
             .join('rect')
@@ -149,10 +150,16 @@ export class BarChartRenderer extends BaseChartRenderer {
             .attr('y', d => Math.min(yScale(d.value), yBase))
             .attr('width', xGroup.bandwidth())
             .attr('height', d => Math.abs(yScale(d.value) - yBase))
-            .attr('fill', d => seriesColorScale(d.key))
+            .attr('fill', d => {
+                const grading = gradingMap?.get(d.key);
+                if (grading?.colorScale && grading?.colorInfo?.columnName) {
+                    const val = d._row[grading.colorInfo.columnName];
+                    if (val !== undefined && val !== null) return grading.colorScale(val);
+                }
+                return seriesColorScale(d.key);
+            })
             .attr('opacity', this.opacity)
-            .append('title')
-            .text(d => `${d.key}: ${d.value}`);
+
 
         // Draw error bars if data contains CI information
         this.drawErrorBars(g, data, scales, xAxisInfo, seriesInfo, xGroup, getX);
@@ -259,7 +266,7 @@ export class BarChartRenderer extends BaseChartRenderer {
      * @param {Array<Object>} seriesInfo - Series configurations
      * @param {d3.Scale} seriesColorScale - Color scale for series
      */
-    renderStackedBars(g, data, scales, xAxisInfo, seriesInfo, seriesColorScale) {
+    renderStackedBars(g, data, scales, xAxisInfo, seriesInfo, seriesColorScale, gradingMap = null) {
         const { xScale, yScale } = scales;
 
         // Determine bandwidth
@@ -312,12 +319,19 @@ export class BarChartRenderer extends BaseChartRenderer {
             .enter()
             .append('g')
             .attr('class', 'stack')
-            .attr('fill', d => seriesColorScale(d.key))
             .attr('opacity', this.opacity)
             .selectAll('rect')
-            .data(d => d)
+            .data(d => d.map(pt => ({ ...pt, _key: d.key })))
             .enter()
             .append('rect')
+            .attr('fill', d => {
+                const grading = gradingMap?.get(d._key);
+                if (grading?.colorScale && grading?.colorInfo?.columnName) {
+                    const val = d.data[grading.colorInfo.columnName];
+                    if (val !== undefined && val !== null) return grading.colorScale(val);
+                }
+                return seriesColorScale(d._key);
+            })
             .attr('x', d => {
                 if (typeof xGroup.bandwidth === 'function') {
 
@@ -342,14 +356,11 @@ export class BarChartRenderer extends BaseChartRenderer {
             })
             .attr('width', xScale.bandwidth())
             .each(function (d) {
-                // Store reference to parent group to get series name
-                const stackGroup = this.parentNode;
-                const seriesName = d3.select(stackGroup).datum().key;
                 const actualValue = d[1] - d[0];
                 if (actualValue > 0) {
                     d3.select(this)
                         .append('title')
-                        .text(`${seriesName}: ${actualValue}`);
+                        .text(`${d._key}: ${actualValue}`);
                 }
             });
     }
@@ -567,8 +578,7 @@ export class BarChartRenderer extends BaseChartRenderer {
             .attr('opacity', this.opacity)
             .style('stroke', '#fff')
             .style('stroke-width', 0.5)
-            .append('title')
-            .text(d => `${xAxisInfo.columnName}: ${d[xAxisInfo.columnName]}\n${yAxisInfo.columnName}: ${d[yAxisInfo.columnName]}`);
+            
 
         // Draw error bars if data contains CI information
         // For simple bars, we treat it as a single series

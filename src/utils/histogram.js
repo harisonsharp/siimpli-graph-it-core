@@ -245,7 +245,7 @@ function FreedmanDiaconis(data) {
 
 
 // This gorups the data into the bins they belong in, makes the graphing app less code heavy by grouping and labelling data in this helper
-function generateCustomBins(dataSeries) {
+function generateCustomBins(dataSeries, numBinsOverride = null) {
     let bulkData, outliers;
 
     if (dataSeries && dataSeries.length > 100) {
@@ -268,21 +268,17 @@ function generateCustomBins(dataSeries) {
 
     const rangeMin = Math.min(...bulkData);
     const rangeMax = Math.max(...bulkData);
-    const n = bulkData.length;
 
-    let binWidth;
-    const fdBin = FreedmanDiaconis(bulkData)
-
-    const heapingBin = getHeapingAwareBinSize(bulkData, fdBin);
-    if (heapingBin) {
-        binWidth = heapingBin;
-    }
-    else {
-        binWidth = fdBin;
+    let desiredNumBins;
+    if (numBinsOverride && Number.isFinite(numBinsOverride) && numBinsOverride >= 1) {
+        desiredNumBins = Math.round(numBinsOverride);
+    } else {
+        const fdBin = FreedmanDiaconis(bulkData);
+        const heapingBin = getHeapingAwareBinSize(bulkData, fdBin);
+        const binWidth = heapingBin || fdBin;
+        desiredNumBins = Math.max(1, Math.ceil((rangeMax - rangeMin) / binWidth));
     }
 
-    // Number of bins implied by binWidth
-    const desiredNumBins = Math.max(1, Math.ceil((rangeMax - rangeMin) / binWidth));
     const finalBinWidth = (rangeMax - rangeMin) / desiredNumBins;
 
     // Build bins

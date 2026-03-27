@@ -101,6 +101,15 @@ const formatNumber = (value, thresholdDigits) => {
         // Use 3 significant figures (e.g. 1.42e+5)
         return d3.format(".2e")(value);
     }
+
+    // Apply comma grouping for numbers > 999
+    if (absVal > 999) {
+        const isInteger = Number.isInteger(value);
+        return isInteger
+            ? d3.format(",")(value)
+            : d3.format(",~f")(value);
+    }
+
     return value;
 };
 
@@ -145,34 +154,51 @@ const drawXAxis = (g, xScale, xAxisY, xAxisLabelOffset, xAxisLabel, graphType, d
     const staticXScale = getStaticScale(config, 'x');
 
     // Histogram specific handling - Range Labels
+    let histogramBinCount = 0;
     if (graphType === 'histogram' && data && xAxisInfo) {
         // Extract values to generate bins matching the renderer
-        const values = data
+        const rawValues = data
             .map(d => +d[xAxisInfo.columnName])
             .filter(v => !isNaN(v) && isFinite(v));
 
-        if (values.length > 0) {
-            const bins = generateCustomBins(values);
-            const normalBins = bins.filter(b => !b.isOutlierBin);
+        if (rawValues.length > 0) {
+            const logX = config?.logX;
+            // When logX is on, bin in log space then back-transform to raw space (matches HistogramRenderer)
+            const binValues = logX
+                ? rawValues.filter(v => v > 0).map(v => Math.log10(v))
+                : rawValues;
 
-            // Use bin midpoints for ticks
-            // We need to be careful not to clutter.
-            // If too many bins, maybe skip some?
-            // For now, let's try to show all normal bins if they fit.
-            const tickValues = normalBins.map(b => (b.min + b.max) / 2);
+            const numBinsOverride = config?.numBins ? Number(config.numBins) : null;
+            let bins = generateCustomBins(binValues, numBinsOverride);
+            if (logX) {
+                bins = bins.map(b => ({ ...b, min: 10 ** b.min, max: 10 ** b.max }));
+            }
+            const normalBins = bins.filter(b => !b.isOutlierBin);
+            histogramBinCount = normalBins.length;
+
+            // Determine if labels would be too dense and skip every other bin if so.
+            // Each range label like "10.2-15.6" is roughly 80px wide; rotate adds some room
+            // but we still skip alternating bins when pixel-per-bin < threshold.
+            const [rangeStart, rangeEnd] = xScale.range();
+            const chartWidth = Math.abs(rangeEnd - rangeStart);
+            const pixelsPerBin = normalBins.length > 0 ? chartWidth / normalBins.length : chartWidth;
+            const MIN_LABEL_PX = 60;
+            const skipAlternate = pixelsPerBin < MIN_LABEL_PX;
+
+            // Tick positions are bin midpoints in data space — correct for a linear scale.
+            // We use index (i) in tickFormat instead of searching by value to avoid
+            // floating-point round-trip errors from D3's scale inversion.
+            const activeBins = skipAlternate
+                ? normalBins.filter((_, i) => i % 2 === 0)
+                : normalBins;
+            const tickValues = activeBins.map(b => (b.min + b.max) / 2);
 
             axisGenerator.tickValues(tickValues)
-                .tickFormat((d, i) => {
-                    // Find the bin corresponding to this tick (midpoint)
-                    // Since we generated tickValues from normalBins, they should match index i
-                    // provided d3 doesn't skip ticks.
-                    // To be safe, find bin containing d.
-                    const bin = normalBins.find(b => d >= b.min && d <= b.max);
-                    if (bin) {
-                        // Format range
-                        return `${Number(bin.min.toFixed(1))}-${Number(bin.max.toFixed(1))}`;
-                    }
-                    return d;
+                .tickFormat((_, i) => {
+                    const bin = activeBins[i];
+                    if (!bin) return '';
+                    const precision = logX ? 3 : 1;
+                    return `${Number(bin.min.toFixed(precision))}-${Number(bin.max.toFixed(precision))}`;
                 });
         }
     } else if (!xScale.bandwidth) {
@@ -190,7 +216,12 @@ const drawXAxis = (g, xScale, xAxisY, xAxisLabelOffset, xAxisLabel, graphType, d
             if (staticXScale) {
                 axisGenerator.tickValues(buildTickValues(staticXScale.min, staticXScale.max, staticXScale.step));
             }
-            axisGenerator.tickFormat(d => formatNumber(d, 6));
+            if (config?.logX) {
+                // Tick values are log₁₀-transformed — display as the log value (e.g. 4 for 10000)
+                axisGenerator.tickFormat(d => Number(d.toPrecision(4)).toString());
+            } else {
+                axisGenerator.tickFormat(d => formatNumber(d, 6));
+            }
         }
     }
 
@@ -228,8 +259,8 @@ const drawXAxis = (g, xScale, xAxisY, xAxisLabelOffset, xAxisLabel, graphType, d
             .attr('dx', '-.8em')
             .attr('dy', '.15em')
             .attr('transform', 'rotate(-45)');
-    } else if (graphType === 'histogram') {
-        // Histogram ranges can be long, so rotate them too
+    } else if (graphType === 'histogram' && histogramBinCount > 1) {
+        // Range labels like "10.2-15.6" are always long — rotate whenever there's more than one bin
         xAxis.selectAll('text')
             .style('text-anchor', 'end')
             .attr('dx', '-.8em')
@@ -255,7 +286,9 @@ const drawXAxis = (g, xScale, xAxisY, xAxisLabelOffset, xAxisLabel, graphType, d
 const drawPrimaryYAxis = (g, xScale, primaryYScale, yAxisX, primaryColor, config = {}) => {
     const axisGenerator = d3.axisLeft(primaryYScale)
         .tickSizeOuter(0)
-        .tickFormat(d => formatNumber(d, 8)); // 8 digits threshold for Y-axis
+        .tickFormat(d => config?.logY
+            ? Number(d.toPrecision(4)).toString()
+            : formatNumber(d, 8));
 
     const staticYScale = getStaticScale(config, 'y');
     if (staticYScale) {
@@ -435,14 +468,17 @@ export const drawAxes = (
     const primaryColor = axisColors?.primary || '#333';
     const secondaryColor = axisColors?.secondary || '#333';
 
-    drawXAxis(g, xScale, xAxisY, 50, xAxisLabel, graphType, data, xAxisInfo, config);
+    const finalXLabel = config?.logX ? `${xAxisLabel} (log\u2081\u2080)` : xAxisLabel;
+    const finalYLabelWithLog = config?.logY ? `${finalPrimaryLabel} (log\u2081\u2080)` : finalPrimaryLabel;
+
+    drawXAxis(g, xScale, xAxisY, 50, finalXLabel, graphType, data, xAxisInfo, config);
     drawPrimaryYAxis(g, xScale, primaryYScale, yAxisX, primaryColor, config);
     debugLog('[drawAxes] Secondary Y Scale and isDualAxis: ', secondaryYScale, isDualAxis);
     if (isDualAxis && secondaryYScale) {
         drawSecondaryYAxis(g, secondaryYScale, width, secondaryColor, config);
     }
 
-    drawLabels(g, height, width, margin, finalPrimaryLabel, secondaryLabel, xAxisLabel, xAxisY, 50, primaryColor, secondaryColor);
+    drawLabels(g, height, width, margin, finalYLabelWithLog, secondaryLabel, finalXLabel, xAxisY, 50, primaryColor, secondaryColor);
 
     // Draw guide lines if enabled
     if (globalSettings.showGuideLines) {

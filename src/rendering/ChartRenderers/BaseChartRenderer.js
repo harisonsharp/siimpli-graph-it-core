@@ -23,10 +23,18 @@
 
 import { DataValidator } from '../../core/validation/DataValidator.js';
 import { ScaleFactory } from '../ScaleFactory.js';
-import { debugLog, debugWarn } from '../../utils/debug.js';
+import { debugWarn } from '../../utils/debug.js';
 import { parseNumber } from '../../utils/dataUtils.js';
+import { parseColumnId } from '../../utils/columnUtils.js';
+import { HoverTableRenderer } from '../HoverTableRenderer.js';
 
 export class BaseChartRenderer {
+    static HOVER_MODAL_CLASS = HoverTableRenderer.HOVER_MODAL_CLASS;
+
+    constructor() {
+        this.hoverTableRenderer = new HoverTableRenderer();
+    }
+
     /**
      * Get renderer type identifier
      * @returns {string} Chart type
@@ -127,20 +135,168 @@ export class BaseChartRenderer {
      * @returns {string} Color value
      */
     getPointColor(dataPoint, colorScale, colorInfo, config, fallbackColor) {
+        // Per-series color grading takes priority
+        if (colorScale && colorInfo?.columnName) {
+            const value = dataPoint[colorInfo.columnName];
+            if (value !== undefined && value !== null) {
+                return colorScale(value);
+            }
+        }
         const series = config.series.filter(s => s.yAxis.split('::')[1] === dataPoint._sourceFile && Array.from(Object.keys(dataPoint)).includes(s.yAxis.split('::')[0]));
         if (series.length === 0) {
             debugWarn('[BASE_CHART_RENDERER - getPointColor] No series found for data point when getting color', dataPoint);
             return fallbackColor || this.getDefaultColor();
-        } else {
-            return ScaleFactory.resolveColor(series[0].color);
         }
-        // if (config.colorGrading || colorScale || colorInfo) {
-        //     const value = dataPoint[colorInfo.columnName];
-        //     if (value !== undefined && value !== null) {
-        //         return colorScale(value);
-        //     }
-        // }
-        // return fallbackColor || this.getDefaultColor();
+        return ScaleFactory.resolveColor(series[0].color) || fallbackColor || this.getDefaultColor();
+    }
+
+    /**
+     * Ensure a shared hover modal exists for the current graph container.
+     * @param {d3.Selection} g - D3 group selection for the current chart render
+     * @returns {{ modal: HTMLDivElement|null, host: HTMLElement|null }}
+     */
+    ensureHoverModal(g) {
+        return this.hoverTableRenderer.ensureHoverModal(g);
+    }
+
+    clearHoverHideTimer(modal) {
+        this.hoverTableRenderer.clearHideTimer(modal);
+    }
+
+    cancelPointHoverHide(g) {
+        this.hoverTableRenderer.cancelHide(g);
+    }
+
+    schedulePointHoverHide(g, delayMs = 450) {
+        this.hoverTableRenderer.scheduleHide(g, delayMs);
+    }
+
+    showPointHoverModal(g, event, pointData, context = {}) {
+        this.hoverTableRenderer.show(g, event, pointData, context);
+    }
+
+    updatePointHoverModalPosition(g, event) {
+        this.hoverTableRenderer.updatePosition(g, event);
+    }
+
+    hidePointHoverModal(g) {
+        this.hoverTableRenderer.hide(g);
+    }
+
+    getPdfLinkingConfig(config = {}) {
+        const pdfLinking = config?.pdfLinking;
+        return {
+            enabled: Boolean(pdfLinking?.enabled),
+            folderPath: typeof pdfLinking?.folderPath === 'string' ? pdfLinking.folderPath.trim() : '',
+            nameField: typeof pdfLinking?.nameField === 'string' ? pdfLinking.nameField.trim() : '',
+            fileType: (pdfLinking?.fileType === 'json' ? 'json' : 'pdf')
+        };
+    }
+
+    getPointFieldValue(pointData, fieldId) {
+        if (!pointData || !fieldId) {
+            return null;
+        }
+
+        const { columnName } = parseColumnId(fieldId);
+        const targetField = columnName || fieldId;
+
+        if (pointData[targetField] !== undefined && pointData[targetField] !== null && pointData[targetField] !== '') {
+            return pointData[targetField];
+        }
+
+        const informative = pointData.__informative;
+        if (informative && typeof informative === 'object' &&
+            informative[targetField] !== undefined && informative[targetField] !== null && informative[targetField] !== '') {
+            return informative[targetField];
+        }
+
+        return null;
+    }
+
+    buildResourceTarget(folderPath, baseFileName, fileType = 'pdf') {
+        if (!folderPath || !baseFileName || !fileType) {
+            return null;
+        }
+
+        const escapedExt = fileType.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        const extRegex = new RegExp(`\\.${escapedExt}$`, 'i');
+        const normalizedBase = String(baseFileName).trim().replace(extRegex, '');
+        if (!normalizedBase) {
+            return null;
+        }
+
+        const fileName = `${normalizedBase}.${fileType}`;
+        const isHttp = /^https?:\/\//i.test(folderPath);
+        if (isHttp) {
+            const cleanFolder = folderPath.replace(/\/+$/, '');
+            return {
+                isLocalPath: false,
+                openTarget: `${cleanFolder}/${encodeURIComponent(fileName)}`,
+                fallbackUrl: `${cleanFolder}/${encodeURIComponent(fileName)}`
+            };
+        }
+
+        const normalizedFolder = folderPath.replace(/[\\/]+$/, '');
+        const separator = normalizedFolder.includes('\\') ? '\\' : '/';
+        const fullPath = `${normalizedFolder}${separator}${fileName}`;
+        const uriReadyPath = fullPath.replace(/\\/g, '/');
+        const fallbackUrl = /^[A-Za-z]:\//.test(uriReadyPath)
+            ? `file:///${encodeURI(uriReadyPath)}`
+            : `file://${encodeURI(uriReadyPath)}`;
+
+        return {
+            isLocalPath: true,
+            openTarget: fullPath,
+            fallbackUrl
+        };
+    }
+
+    async openLinkedResourceForPoint(pointData, config = {}) {
+        const { enabled, folderPath, nameField, fileType } = this.getPdfLinkingConfig(config);
+        if (!enabled || !folderPath || !nameField) {
+            return false;
+        }
+
+        const rawFileName = this.getPointFieldValue(pointData, nameField);
+        if (rawFileName === null) {
+            return false;
+        }
+
+        const target = this.buildResourceTarget(folderPath, rawFileName, fileType);
+        if (!target) {
+            return false;
+        }
+
+        try {
+            const openerPlugin = await import('@tauri-apps/plugin-opener');
+            if (target.isLocalPath && typeof openerPlugin?.openPath === 'function') {
+                await openerPlugin.openPath(target.openTarget);
+                return true;
+            }
+            if (!target.isLocalPath && typeof openerPlugin?.openUrl === 'function') {
+                await openerPlugin.openUrl(target.openTarget);
+                return true;
+            }
+        } catch (error) {
+            debugWarn('[BaseChartRenderer.openLinkedResourceForPoint] Failed to open with Tauri opener plugin', error);
+            if (target.isLocalPath) {
+                // Never attempt file:// navigation in webview for local files; it is blocked by Tauri.
+                return false;
+            }
+        }
+
+        const opener = globalThis?.window?.open;
+        if (typeof opener !== 'function') {
+            debugWarn('[BaseChartRenderer.openLinkedResourceForPoint] window.open is unavailable in this runtime');
+            return false;
+        }
+
+        const openedWindow = opener(target.fallbackUrl, '_blank', 'noopener,noreferrer');
+        if (openedWindow && typeof openedWindow === 'object') {
+            openedWindow.opener = null;
+        }
+        return true;
     }
 
     /**

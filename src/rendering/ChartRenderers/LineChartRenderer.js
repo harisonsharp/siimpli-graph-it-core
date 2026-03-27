@@ -103,8 +103,10 @@ export class LineChartRenderer extends BaseChartRenderer {
                 // Band scale - position at center of band
                 return xScale(xValue) + xScale.bandwidth() / 2;
             } else {
-                // Linear scale - direct mapping
-                return xScale(parseNumber(xValue));
+                // Linear scale - pre-transform to log space if logX is active
+                const raw = parseNumber(xValue);
+                const mapped = config?.logX ? Math.log10(raw) : raw;
+                return xScale(mapped);
             }
         };
 
@@ -114,7 +116,10 @@ export class LineChartRenderer extends BaseChartRenderer {
         // Create line generator
         const lineGenerator = d3.line()
             .x(getXPosition)
-            .y(d => yScale(parseNumber(d[yAxisInfo.columnName])));
+            .y(d => {
+                const raw = parseNumber(d[yAxisInfo.columnName]);
+                return yScale(config?.logY ? Math.log10(raw) : raw);
+            });
 
         // Apply curve interpolation
         if (d3[curveType]) {
@@ -133,31 +138,91 @@ export class LineChartRenderer extends BaseChartRenderer {
 
         const finalColor = ScaleFactory.resolveColor(seriesConfig.color || seriesColor) || this.getDefaultColor();
         const finalStrokeWidth = seriesConfig.strokeWidth || this.strokeWidth;
-        // Draw the line
-        g.append('path')
-            .datum(sortedData)
-            .attr('class', 'line-chart')
-            .attr('fill', 'none')
-            .attr('stroke', finalColor)
-            .attr('stroke-width', finalStrokeWidth)
-            .attr('stroke-linejoin', 'round')
-            .attr('stroke-linecap', 'round')
-            .attr('stroke-dasharray', strokeDashArray)
-            .attr('d', lineGenerator);
 
-        // Draw points if enabled
+        const hasColorGrading = colorScale && colorInfo?.columnName;
+        const gradColName = colorInfo?.columnName;
+
+        if (!hasColorGrading) {
+            // Standard path: single SVG path with full curve interpolation
+            g.append('path')
+                .datum(sortedData)
+                .attr('class', 'line-chart')
+                .attr('fill', 'none')
+                .attr('stroke', finalColor)
+                .attr('stroke-width', finalStrokeWidth)
+                .attr('stroke-linejoin', 'round')
+                .attr('stroke-linecap', 'round')
+                .attr('stroke-dasharray', strokeDashArray)
+                .attr('d', lineGenerator);
+        } else {
+            // Graded path: N-1 individual line segments, each coloured by midpoint grading value.
+            // Curve interpolation is not applied — segments are straight lines between sorted points.
+            const segGroup = g.append('g').attr('class', 'line-chart-graded');
+            for (let i = 0; i < sortedData.length - 1; i++) {
+                const p1 = sortedData[i];
+                const p2 = sortedData[i + 1];
+                const v1 = p1[gradColName];
+                const v2 = p2[gradColName];
+                let midVal;
+                if (v1 !== undefined && v2 !== undefined && typeof v1 === 'number' && typeof v2 === 'number') {
+                    midVal = (v1 + v2) / 2;
+                } else {
+                    midVal = v1 !== undefined ? v1 : v2;
+                }
+                const segColor = (midVal !== undefined && midVal !== null) ? colorScale(midVal) : finalColor;
+                const y1raw = parseNumber(p1[yAxisInfo.columnName]);
+                const y2raw = parseNumber(p2[yAxisInfo.columnName]);
+                segGroup.append('line')
+                    .attr('class', 'line-chart-segment')
+                    .attr('x1', getXPosition(p1))
+                    .attr('y1', yScale(config?.logY ? Math.log10(y1raw) : y1raw))
+                    .attr('x2', getXPosition(p2))
+                    .attr('y2', yScale(config?.logY ? Math.log10(y2raw) : y2raw))
+                    .attr('stroke', segColor)
+                    .attr('stroke-width', finalStrokeWidth)
+                    .attr('stroke-linecap', 'round')
+                    .attr('stroke-dasharray', strokeDashArray);
+            }
+        }
+
+        // Draw points if enabled (per-point colour when grading is active)
         if (seriesConfig.showPoints) {
-            g.selectAll('.line-point')
+            const linePoints = g.selectAll('.line-point')
                 .data(sortedData)
                 .enter()
                 .append('circle')
                 .attr('class', 'line-point')
                 .attr('cx', getXPosition)
-                .attr('cy', d => yScale(parseNumber(d[yAxisInfo.columnName])))
-                .attr('r', (this.strokeWidth || 3) + 1) // Slightly larger than line width
-                .attr('fill', finalColor)
+                .attr('cy', d => {
+                    const raw = parseNumber(d[yAxisInfo.columnName]);
+                    return yScale(config?.logY ? Math.log10(raw) : raw);
+                })
+                .attr('r', (this.strokeWidth || 3) + 1)
+                .attr('fill', d => {
+                    if (!hasColorGrading) return finalColor;
+                    const val = d[gradColName];
+                    return (val !== undefined && val !== null) ? colorScale(val) : finalColor;
+                })
                 .attr('stroke', '#fff')
                 .attr('stroke-width', 1);
+
+            linePoints
+                .on('mouseenter', (event, d) => {
+                    this.cancelPointHoverHide(g);
+                    this.showPointHoverModal(g, event, d, { seriesName: yAxisInfo.columnName, graphConfig: config });
+                })
+                .on('mousemove', () => {
+                    this.cancelPointHoverHide(g);
+                })
+                .on('mouseleave', (event) => {
+                    if (event.relatedTarget?.closest?.(`.${BaseChartRenderer.HOVER_MODAL_CLASS}`)) {
+                        return;
+                    }
+                    this.schedulePointHoverHide(g, 500);
+                })
+                .on('click', (_event, d) => {
+                    void this.openLinkedResourceForPoint(d, config);
+                });
         }
     }
 

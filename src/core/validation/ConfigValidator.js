@@ -19,12 +19,32 @@
 import { ValidationError } from './DataValidator.js';
 import { debugLog, debugWarn } from '../../utils/debug.js';
 
+// biome-ignore lint/complexity/noStaticOnlyClass: <explanation>
 export class ConfigValidator {
     static VALID_GRAPH_TYPES = ['scatter', 'line', 'histogram', 'bar'];
     static VALID_COLOR_SCHEMES = ['warm-cool', 'rainbow', 'green-red'];
     static VALID_AXIS_INTERCEPTS = ['minimum', 'origin', 'custom'];
-    static VALID_FIT_TYPES = ['polynomial', 'best_fit', 'custom'];
+    static VALID_FIT_TYPES = ['polynomial', 'power_law', 'best_fit', 'custom'];
     static VALID_BAR_MODES = ['group', 'stack'];
+    static COLOR_HEX_RE = /^#[0-9a-fA-F]{6}$/;
+
+    /**
+     * Validate a CSS hex color string (#rrggbb)
+     * @param {string} color - Color string to validate
+     * @param {string} [field='color'] - Field name for error messages
+     * @throws {ValidationError} If color is not a valid hex string
+     */
+    static validateHexColor(color, field = 'color') {
+        if (!color || typeof color !== 'string') {
+            throw new ValidationError(`${field} must be a non-empty string`, field);
+        }
+        if (!ConfigValidator.COLOR_HEX_RE.test(color)) {
+            throw new ValidationError(
+                `${field} must be a valid hex color (e.g. #ff6b6b), got: ${color}`,
+                field
+            );
+        }
+    }
 
     /**
      * Validate complete graph configuration
@@ -44,45 +64,45 @@ export class ConfigValidator {
             }
 
             config.series.forEach((series, index) => {
-                this.validateSeriesConfig(series, index);
+                ConfigValidator.validateSeriesConfig(series, index);
             });
         }
 
         // Validate graph type
-        if (config.graphType && !this.VALID_GRAPH_TYPES.includes(config.graphType)) {
+        if (config.graphType && !ConfigValidator.VALID_GRAPH_TYPES.includes(config.graphType)) {
             throw new ValidationError(
-                `Invalid graph type: ${config.graphType}. Must be one of: ${this.VALID_GRAPH_TYPES.join(', ')}`,
+                `Invalid graph type: ${config.graphType}. Must be one of: ${ConfigValidator.VALID_GRAPH_TYPES.join(', ')}`,
                 'graphType'
             );
         }
 
         // Validate bar mode if present
-        if (config.barMode && !this.VALID_BAR_MODES.includes(config.barMode)) {
+        if (config.barMode && !ConfigValidator.VALID_BAR_MODES.includes(config.barMode)) {
             throw new ValidationError(
-                `Invalid bar mode: ${config.barMode}. Must be one of: ${this.VALID_BAR_MODES.join(', ')}`,
+                `Invalid bar mode: ${config.barMode}. Must be one of: ${ConfigValidator.VALID_BAR_MODES.join(', ')}`,
                 'barMode'
             );
         }
 
         // Validate color scheme
-        if (config.colorScheme && !this.VALID_COLOR_SCHEMES.includes(config.colorScheme)) {
+        if (config.colorScheme && !ConfigValidator.VALID_COLOR_SCHEMES.includes(config.colorScheme)) {
             throw new ValidationError(
-                `Invalid color scheme: ${config.colorScheme}. Must be one of: ${this.VALID_COLOR_SCHEMES.join(', ')}`,
+                `Invalid color scheme: ${config.colorScheme}. Must be one of: ${ConfigValidator.VALID_COLOR_SCHEMES.join(', ')}`,
                 'colorScheme'
             );
         }
 
         // Validate axis intercept
-        if (config.axisIntercept && !this.VALID_AXIS_INTERCEPTS.includes(config.axisIntercept)) {
+        if (config.axisIntercept && !ConfigValidator.VALID_AXIS_INTERCEPTS.includes(config.axisIntercept)) {
             throw new ValidationError(
-                `Invalid axis intercept: ${config.axisIntercept}. Must be one of: ${this.VALID_AXIS_INTERCEPTS.join(', ')}`,
+                `Invalid axis intercept: ${config.axisIntercept}. Must be one of: ${ConfigValidator.VALID_AXIS_INTERCEPTS.join(', ')}`,
                 'axisIntercept'
             );
         }
 
         // Validate custom intercept if specified
         if (config.axisIntercept === 'custom') {
-            this.validateCustomIntercept(config.customIntercept);
+            ConfigValidator.validateCustomIntercept(config.customIntercept);
         }
 
         // Validate dual Y-axis configuration
@@ -108,7 +128,7 @@ export class ConfigValidator {
             throw new ValidationError(`Series ${index} must be an object`, `series[${index}]`);
         }
 
-        if (series.graphType && !this.VALID_GRAPH_TYPES.includes(series.graphType)) {
+        if (series.graphType && !ConfigValidator.VALID_GRAPH_TYPES.includes(series.graphType)) {
             throw new ValidationError(
                 `Series ${index}: Invalid graph type '${series.graphType}'`,
                 `series[${index}].graphType`
@@ -130,16 +150,16 @@ export class ConfigValidator {
         }
 
         // Validate fit type
-        if (curveFit.fitType && !this.VALID_FIT_TYPES.includes(curveFit.fitType)) {
+        if (curveFit.fitType && !ConfigValidator.VALID_FIT_TYPES.includes(curveFit.fitType)) {
             throw new ValidationError(
-                `Invalid fit type: ${curveFit.fitType}. Must be one of: ${this.VALID_FIT_TYPES.join(', ')}`,
+                `Invalid fit type: ${curveFit.fitType}. Must be one of: ${ConfigValidator.VALID_FIT_TYPES.join(', ')}`,
                 'fitType'
             );
         }
 
         // Validate polynomial order
         if (curveFit.fitType === 'polynomial') {
-            const order = parseInt(curveFit.order);
+            const order = curveFit.order ? parseInt(curveFit.order, 10) : 1;
             if (isNaN(order) || order < 1 || order > 10) {
                 throw new ValidationError(
                     'Polynomial order must be an integer between 1 and 10',
@@ -169,9 +189,27 @@ export class ConfigValidator {
             }
         }
 
-        // Validate color
-        if (curveFit.color && typeof curveFit.color !== 'string') {
-            throw new ValidationError('Curve fit color must be a string', 'color');
+        // Validate curve color
+        if (curveFit.color) {
+            ConfigValidator.validateHexColor(curveFit.color, 'color');
+        }
+
+        // Validate confidence band colors
+        const bands = curveFit.confidenceBands?.bands;
+        if (Array.isArray(bands)) {
+            bands.forEach((band, i) => {
+                if (band.color) {
+                    ConfigValidator.validateHexColor(band.color, `confidenceBands.bands[${i}].color`);
+                }
+            });
+        }
+
+        const strokeWidth = curveFit.strokeWidth ? parseInt(curveFit.strokeWidth, 10) : 1;
+        if (Number.isNaN(strokeWidth) || strokeWidth < 1 || strokeWidth > 6) {
+            throw new ValidationError(
+                'Stroke width must be between 1 and 6',
+                'strokeWidth'
+            );
         }
 
         return true;
@@ -255,7 +293,7 @@ export class ConfigValidator {
         }
 
         if (settings.colorScheme) {
-            if (!this.VALID_COLOR_SCHEMES.includes(settings.colorScheme)) {
+            if (!ConfigValidator.VALID_COLOR_SCHEMES.includes(settings.colorScheme)) {
                 throw new ValidationError(
                     `Invalid color scheme in settings: ${settings.colorScheme}`,
                     'colorScheme'
@@ -264,7 +302,7 @@ export class ConfigValidator {
         }
 
         if (settings.axisIntercept) {
-            if (!this.VALID_AXIS_INTERCEPTS.includes(settings.axisIntercept)) {
+            if (!ConfigValidator.VALID_AXIS_INTERCEPTS.includes(settings.axisIntercept)) {
                 throw new ValidationError(
                     `Invalid axis intercept in settings: ${settings.axisIntercept}`,
                     'axisIntercept'
@@ -273,11 +311,11 @@ export class ConfigValidator {
         }
 
         if (settings.graphDimensions) {
-            this.validateGraphDimensions(settings.graphDimensions);
+            ConfigValidator.validateGraphDimensions(settings.graphDimensions);
         }
 
         if (settings.customIntercept) {
-            this.validateCustomIntercept(settings.customIntercept);
+            ConfigValidator.validateCustomIntercept(settings.customIntercept);
         }
 
         return true;
@@ -292,11 +330,6 @@ export class ConfigValidator {
     static validateColumnId(columnId) {
         if (!columnId || typeof columnId !== 'string') {
             throw new ValidationError('Column ID must be a non-empty string');
-        }
-
-        // Column IDs can be empty strings for optional columns
-        if (columnId.trim() === '') {
-            return true;
         }
 
         return true;
@@ -315,7 +348,7 @@ export class ConfigValidator {
 
         curveFits.forEach((fit, index) => {
             try {
-                this.validateCurveFitConfig(fit);
+                ConfigValidator.validateCurveFitConfig(fit);
             } catch (error) {
                 throw new ValidationError(
                     `Curve fit ${index}: ${error.message}`,

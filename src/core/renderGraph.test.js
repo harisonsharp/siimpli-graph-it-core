@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, beforeAll } from 'vitest';
+import { describe, it, expect, beforeEach, beforeAll, vi } from 'vitest';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import * as d3 from 'd3';
@@ -258,5 +258,46 @@ describe('renderGraph integration tests', () => {
         });
         expect(result.success).toBe(true);
         // We'll just verify no crashes occur as this handles deep D3 operations
+    });
+
+    it('Point click opens linked PDF when pdfLinking is configured', () => {
+        const sampleData = [
+            { year: 2020, cu_grade_pct: 1.23, report_id: 'report_2020' }
+        ];
+
+        const config = {
+            graphType: 'scatter',
+            xAxis: 'year',
+            informativeFields: ['report_id'],
+            pdfLinking: {
+                enabled: true,
+                folderPath: 'C:\\Reports\\ProjectA',
+                nameField: 'report_id',
+                fileType: 'pdf'
+            },
+            series: [{ yAxis: 'cu_grade_pct', type: 'scatter' }]
+        };
+
+        const openSpy = vi.spyOn(window, 'open').mockReturnValue(null);
+
+        const result = renderGraph({
+            svg,
+            csvData: sampleData,
+            graphConfig: config,
+            globalSettings: defaultGlobalSettings,
+            colorSchemes: defaultColors
+        });
+
+        expect(result.success).toBe(true);
+
+        const dot = svg.querySelector('path.dot');
+        expect(dot).toBeTruthy();
+
+        dot.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+
+        expect(openSpy).toHaveBeenCalledTimes(1);
+        expect(openSpy.mock.calls[0][0]).toBe('file:///C:/Reports/ProjectA/report_2020.pdf');
+
+        openSpy.mockRestore();
     });
 });

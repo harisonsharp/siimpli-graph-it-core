@@ -61,16 +61,16 @@ export class GraphService {
      * @deprecated Use GraphCompositionRenderer.drawDataSeries directly.
      * Delegates to internal renderer for backward compatibility.
      */
-    drawDataSeries(g, validData, xScale, yScale, xAxisInfo, seriesInfo, colorScale, colorInfo, graphConfig, seriesColorScale) {
-        return this._renderer.drawDataSeries(g, validData, xScale, yScale, xAxisInfo, seriesInfo, colorScale, colorInfo, graphConfig, seriesColorScale);
+    drawDataSeries(g, validData, xScale, yScale, xAxisInfo, seriesInfo, colorScale, colorInfo, graphConfig, seriesColorScale, seriesColorScales = null) {
+        return this._renderer.drawDataSeries(g, validData, xScale, yScale, xAxisInfo, seriesInfo, colorScale, colorInfo, graphConfig, seriesColorScale, seriesColorScales);
     }
 
     /**
      * @deprecated Use GraphCompositionRenderer.renderSeriesGroup directly.
      * @internal Delegates to internal renderer.
      */
-    renderSeriesGroup(g, validData, xScale, yScale, xAxisInfo, seriesInfo, colorScale, colorInfo, graphConfig, seriesColorScale) {
-        return this._renderer.renderSeriesGroup(g, validData, xScale, yScale, xAxisInfo, seriesInfo, colorScale, colorInfo, graphConfig, seriesColorScale);
+    renderSeriesGroup(g, validData, xScale, yScale, xAxisInfo, seriesInfo, graphConfig, seriesColorScale, seriesColorScales = null) {
+        return this._renderer.renderSeriesGroup(g, validData, xScale, yScale, xAxisInfo, seriesInfo, graphConfig, seriesColorScale, seriesColorScales);
     }
 
     /**
@@ -93,8 +93,8 @@ export class GraphService {
     /**
      * @deprecated Use GraphCompositionRenderer.drawCurveFits directly.
      */
-    drawCurveFits(g, curveFits, xScale, yScale, width, seriesInfo = [], axisInfo = {}, dimensions = {}) {
-        return this._renderer.drawCurveFits(g, curveFits, xScale, yScale, width, seriesInfo, axisInfo, dimensions);
+    drawCurveFits(g, curveFits, xScale, yScale, width, seriesInfo = [], axisInfo = {}, dimensions = {}, config = {}) {
+        return this._renderer.drawCurveFits(g, curveFits, xScale, yScale, width, seriesInfo, axisInfo, dimensions, config);
     }
 
     /**

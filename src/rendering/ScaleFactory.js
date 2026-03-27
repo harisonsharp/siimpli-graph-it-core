@@ -23,6 +23,7 @@ import * as d3 from 'd3';
 import { DataValidator } from '../core/validation/DataValidator.js';
 import { generateCustomBins } from '../utils/histogram.js';
 import { debugLog, debugWarn } from '../utils/debug.js';
+import { parseColumnId } from '../utils/columnUtils.js';
 export class ScaleFactory {
     /**
      * Color scheme interpolators
@@ -32,6 +33,8 @@ export class ScaleFactory {
         'rainbow': d3.interpolateRainbow,
         'green-red': d3.interpolateRdYlGn
     };
+
+    static COLOR_SCHEME_NAMES = ['warm-cool', 'rainbow', 'green-red'];
 
     /**
      * Create linear scale for continuous numeric data
@@ -95,10 +98,11 @@ export class ScaleFactory {
      * Create color scale for data visualization
      * @param {Array<Object>} data - Data array
      * @param {Object} colorInfo - {columnName, fileName} color column info
-     * @param {string} colorScheme - Color scheme name
+     * @param {string} colorScheme - Color scheme name (for continuous)
+     * @param {Object} categoryColors - Optional overrides for distinct mode: { [categoryValue]: hexColor }
      * @returns {d3.Scale|null} Color scale or null if no color grading
      */
-    static createColorScale(data, colorInfo, colorScheme = 'warm-cool') {
+    static createColorScale(data, colorInfo, colorScheme = 'warm-cool', categoryColors = {}) {
         if (!colorInfo || !colorInfo.columnName) {
             return null;
         }
@@ -114,7 +118,9 @@ export class ScaleFactory {
         // Categorical (string) color scale
         if (typeof colorValues[0] === 'string') {
             const uniqueValues = [...new Set(colorValues)];
-            const colors = d3.schemeCategory10.slice(0, uniqueValues.length);
+            const colors = uniqueValues.map((val, i) =>
+                (categoryColors && categoryColors[val]) || d3.schemeCategory10[i % 10]
+            );
             return d3.scaleOrdinal()
                 .domain(uniqueValues)
                 .range(colors);
@@ -126,6 +132,34 @@ export class ScaleFactory {
 
         return d3.scaleSequential(interpolator)
             .domain(extent);
+    }
+
+    /**
+     * Build per-series color grading scales from series configs.
+     * Returns an array (indexed to seriesInfo) of { colorScale, colorInfo } or null for ungraded series.
+     * @param {Array<Object>} validData - Filtered valid data
+     * @param {Array<Object>} seriesInfo - Series configurations (each has .colorGrading)
+     * @returns {Array<{colorScale: d3.Scale, colorInfo: Object}|null>}
+     */
+    static createSeriesColorScales(validData, seriesInfo) {
+        if (!Array.isArray(seriesInfo)) return [];
+        return seriesInfo.map(series => {
+            const grading = series.colorGrading;
+            if (!grading?.enabled || !grading.column) return null;
+
+            const colorInfo = parseColumnId(grading.column);
+            if (!colorInfo?.columnName) return null;
+
+            const colorScale = ScaleFactory.createColorScale(
+                validData,
+                colorInfo,
+                grading.scheme || 'warm-cool',
+                grading.mode === 'distinct' ? (grading.categoryColors || {}) : {}
+            );
+            if (!colorScale) return null;
+
+            return { colorScale, colorInfo, mode: grading.mode || 'continuous' };
+        });
     }
 
     /**
@@ -151,7 +185,7 @@ export class ScaleFactory {
     static resolveColor(color) {
         if (!color) return color;
         const normalized = color.toLowerCase().trim();
-        return this.CUSTOM_COLOR_MAP[normalized] || color;
+        return ScaleFactory.CUSTOM_COLOR_MAP[normalized] || color;
     }
 
     /**
@@ -248,16 +282,28 @@ export class ScaleFactory {
             const uniqueXValues = [...new Set(xValues)];
             xScale = this.createBandScale(uniqueXValues, [0, width], 0.5);
         } else {
-            // Create linear scale for continuous data
+            // Create linear (or log) scale for continuous data
             const xExtent = d3.extent(xValues, d => +d);
             if (staticXScale) {
-                xScale = this.createLinearScale([staticXScale.min, staticXScale.max], [0, width]);
+                if (config.logX) {
+                    const logMin = Math.log10(Math.max(staticXScale.min, 1e-10));
+                    const logMax = Math.log10(Math.max(staticXScale.max, 1e-10));
+                    xScale = this.createLinearScale([logMin, logMax], [0, width]);
+                } else {
+                    xScale = this.createLinearScale([staticXScale.min, staticXScale.max], [0, width]);
+                }
             } else if (xExtent[0] === undefined || xExtent[1] === undefined || isNaN(xExtent[0]) || isNaN(xExtent[1])) {
                 // Fallback to band if numeric fails
                 const uniqueXValues = [...new Set(xValues)];
                 xScale = this.createBandScale(uniqueXValues, [0, width], 0.5);
             } else {
-                xScale = this.createLinearScale(xExtent, [0, width]);
+                if (config.logX) {
+                    const positiveXValues = xValues.filter(v => +v > 0);
+                    const logExtent = d3.extent(positiveXValues, d => Math.log10(+d));
+                    xScale = this.createLinearScale(logExtent, [0, width]);
+                } else {
+                    xScale = this.createLinearScale(xExtent, [0, width]);
+                }
             }
         }
 
@@ -348,7 +394,8 @@ export class ScaleFactory {
                 if (s.graphType === 'histogram') {
                     if (xAxisInfo && xAxisInfo.columnName) {
                         const xValues = data.map(d => +d[xAxisInfo.columnName]).filter(v => !isNaN(v) && isFinite(v));
-                        const bins = generateCustomBins(xValues);
+                        const numBinsOverride = config?.numBins ? Number(config.numBins) : null;
+                        const bins = generateCustomBins(xValues, numBinsOverride);
                         const maxCount = bins.length > 0 ? d3.max(bins, bin => bin.values.length) : 0;
                         yMin = Math.min(yMin, 0);
                         yMax = Math.max(yMax, maxCount);
@@ -385,6 +432,11 @@ export class ScaleFactory {
         const axisStaticScale = this.getStaticScaleConfig(config, axis === 'secondary' ? 'y2' : 'y');
 
         if (axisStaticScale) {
+            if (config.logY) {
+                const logMin = Math.log10(Math.max(axisStaticScale.min, 1e-10));
+                const logMax = Math.log10(Math.max(axisStaticScale.max, 1e-10));
+                return this.createLinearScale([logMin, logMax], [height, 0]);
+            }
             return this.createLinearScale([axisStaticScale.min, axisStaticScale.max], [height, 0]);
         }
 
@@ -395,8 +447,15 @@ export class ScaleFactory {
         const bottomPad = shouldStartAtZero ? 0 : 0.05;
         const topPad = shouldStartAtZero ? 0 : 0.05;
         const finalMin = shouldStartAtZero ? Math.min(0, yMin) : yMin;
-        const [paddedMin, paddedMax] = this.addDomainPadding(finalMin, yMax, topPad, bottomPad);
 
+        if (config.logY) {
+            const positiveMin = Math.max(finalMin, 1e-10);
+            const positiveMax = Math.max(yMax, positiveMin * 10);
+            const [paddedLogMin, paddedLogMax] = this.addDomainPadding(Math.log10(positiveMin), Math.log10(positiveMax), topPad, bottomPad);
+            return this.createLinearScale([paddedLogMin, paddedLogMax], [height, 0]);
+        }
+
+        const [paddedMin, paddedMax] = this.addDomainPadding(finalMin, yMax, topPad, bottomPad);
         return this.createLinearScale([paddedMin, paddedMax], [height, 0]);
     }
 
@@ -409,28 +468,44 @@ export class ScaleFactory {
      * @returns {Object} { xScale, yScale }
      */
     static createHistogramScales(data, xAxisInfo, width, height, config = {}) {
-        const values = data
+        const rawValues = data
             .map(d => +d[xAxisInfo.columnName])
             .filter(v => !isNaN(v) && isFinite(v));
 
-        if (values.length === 0) {
+        if (rawValues.length === 0) {
             throw new Error(`Histogram requires numeric data for column ${xAxisInfo.columnName}`);
         }
 
-        const xExtent = d3.extent(values);
+        // For log X: bin in log space so bars are geometrically spaced
+        const values = config.logX
+            ? rawValues.filter(v => v > 0).map(v => Math.log10(v))
+            : rawValues;
+
+        // For log X, the xScale domain is in log₁₀ space (values already log-transformed above)
         const staticXScale = this.getStaticScaleConfig(config, 'x');
-        const xDomain = staticXScale ? [staticXScale.min, staticXScale.max] : xExtent;
+        let xDomain;
+        if (staticXScale) {
+            xDomain = config.logX
+                ? [Math.log10(Math.max(staticXScale.min, 1e-10)), Math.log10(Math.max(staticXScale.max, 1e-10))]
+                : [staticXScale.min, staticXScale.max];
+        } else {
+            xDomain = d3.extent(values); // already log-transformed when logX
+        }
         const xScale = this.createLinearScale(xDomain, [0, width]);
 
-        const bins = generateCustomBins(values);
+        const numBinsOverride = config?.numBins ? Number(config.numBins) : null;
+        const bins = generateCustomBins(values, numBinsOverride);
         const maxCount = bins.length > 0 ? d3.max(bins, bin => bin.values.length) : 1;
 
         const staticYScale = this.getStaticScaleConfig(config, 'y');
         let yDomain;
         if (staticYScale) {
-            yDomain = [staticYScale.min, staticYScale.max];
+            yDomain = config.logY
+                ? [Math.log10(Math.max(staticYScale.min, 1e-10)), Math.log10(Math.max(staticYScale.max, 1e-10))]
+                : [staticYScale.min, staticYScale.max];
+        } else if (config.logY) {
+            yDomain = this.addDomainPadding(0, Math.log10(Math.max(maxCount, 1)));
         } else {
-            // Add padding to histogram Y scale for better visual spacing
             yDomain = this.addDomainPadding(0, maxCount);
         }
         const yScale = this.createLinearScale(yDomain, [height, 0]);
@@ -486,20 +561,19 @@ export class ScaleFactory {
     }
 
     /**
-     * Create logarithmic scale (not currently used)
-     * @param {Array<number>} domain - [min, max] domain values (must be > 0)
+     * Create logarithmic scale for log-transformed axes.
+     * Clamps domain to positive values — zero/negative inputs are shifted to a small positive floor.
+     * @param {Array<number>} domain - [min, max] domain values
      * @param {Array<number>} range - [min, max] pixel range
      * @returns {d3.ScaleLog} Logarithmic scale
      */
     static createLogScale(domain, range) {
-        if (domain[0] <= 0 || domain[1] <= 0) {
-            throw new Error('Logarithmic scale domain must contain only positive values');
-        }
-
+        const safeMin = Math.max(domain[0], 1e-10);
+        const safeMax = Math.max(domain[1], safeMin * 10);
         return d3.scaleLog()
-            .domain(domain)
+            .domain([safeMin, safeMax])
             .range(range)
-            .nice();
+            .clamp(true);
     }
 
     /**

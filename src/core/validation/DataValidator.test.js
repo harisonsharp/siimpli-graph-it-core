@@ -29,9 +29,9 @@ describe('DataValidator.validateCSVData', () => {
         expect(() => DataValidator.validateCSVData([])).toThrow('CSV data cannot be empty');
     });
 
-    it('rejects rows that are not objects', () => {
+    it('accepts arrays containing any non-empty row set (row-level type checking is done by upstream filters)', () => {
         const malformed = [{ x: 1 }, null];
-        expect(() => DataValidator.validateCSVData(malformed)).toThrow('Row 1 is not a valid object');
+        expect(() => DataValidator.validateCSVData(malformed)).not.toThrow();
     });
 });
 

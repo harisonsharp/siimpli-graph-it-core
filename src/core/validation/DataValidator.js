@@ -42,13 +42,6 @@ export class DataValidator {
             throw new ValidationError('CSV data cannot be empty');
         }
 
-        // Validate that all rows are objects
-        for (let i = 0; i < data.length; i++) {
-            if (!data[i] || typeof data[i] !== 'object') {
-                throw new ValidationError(`Row ${i} is not a valid object`);
-            }
-        }
-
         return true;
     }
 

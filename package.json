@@ -15,8 +15,10 @@
     "author": "Siimpl",
     "license": "ISC",
     "dependencies": {
+        "@napi-rs/canvas": "^0.1.97",
         "@tauri-apps/plugin-dialog": "^2.0.0",
         "@tauri-apps/plugin-fs": "^2.0.0",
+        "@tauri-apps/plugin-opener": "^2.0.0",
         "@tauri-apps/plugin-shell": "^2.0.0",
         "d3": "^7.9.0",
         "prop-types": "^15.8.1",

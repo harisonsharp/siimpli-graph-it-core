@@ -99,7 +99,7 @@ function calculateDimensions(settings, columnInfo, graphConfig) {
  * @param {Object} settings - Global settings with colorScheme
  * @returns {Object} Created scales
  */
-function createScales(validData, columnInfo, dimensions, config, settings) {
+function createScales(validData, columnInfo, dimensions, config) {
     const { xAxisInfo, seriesInfo, colorInfo, graphType } = columnInfo;
     const { width, height } = dimensions;
 
@@ -112,18 +112,19 @@ function createScales(validData, columnInfo, dimensions, config, settings) {
         config
     );
 
-    const colorScale = ScaleFactory.createColorScale(
-        validData,
-        colorInfo,
-        settings.colorScheme
-    );
+    // Legacy global colorGrading scale — kept for histogram fallback, null in practice now
+    const colorScale = colorInfo?.columnName
+        ? ScaleFactory.createColorScale(validData, colorInfo)
+        : null;
 
     const seriesNames = seriesInfo.map(s => s.yAxisInfo.columnName).filter(Boolean);
     const seriesColorScale = seriesNames.length > 0
         ? ScaleFactory.createSeriesColorScale(seriesNames, seriesInfo)
         : null;
 
-    return { xScale, yScale, colorScale, seriesColorScale };
+    const seriesColorScales = ScaleFactory.createSeriesColorScales(validData, seriesInfo);
+
+    return { xScale, yScale, colorScale, seriesColorScale, seriesColorScales };
 }
 
 /**
@@ -236,13 +237,49 @@ function renderAxes(g, scales, columnInfo, dimensions, config, seriesColorScale,
  * Renders data series.
  */
 function renderDataSeries(g, validData, scales, columnInfo, config, graphService) {
-    const { xScale, yScale, colorScale, seriesColorScale } = scales;
+    const { xScale, yScale, colorScale, seriesColorScale, seriesColorScales } = scales;
     const { xAxisInfo, seriesInfo, colorInfo } = columnInfo;
 
     graphService.drawDataSeries(
         g, validData, xScale, yScale, xAxisInfo, seriesInfo,
-        colorScale, colorInfo, config, seriesColorScale
+        colorScale, colorInfo, config, seriesColorScale, seriesColorScales
     );
+}
+
+/**
+ * Enrich rows with configured informative field values for downstream interactions.
+ * Stores values under row.__informative as { [columnName]: value }.
+ */
+function attachInformativeFields(validData, graphConfig) {
+    const informativeFieldIds = Array.isArray(graphConfig?.informativeFields)
+        ? [...new Set(graphConfig.informativeFields.filter(Boolean))]
+        : [];
+
+    if (informativeFieldIds.length === 0) {
+        validData.forEach((row) => {
+            row.__informative = {};
+        });
+        return;
+    }
+
+    const informativeColumnInfo = informativeFieldIds.map((fieldId) => parseColumnId(fieldId));
+
+    validData.forEach((row) => {
+        const informative = {};
+
+        informativeColumnInfo.forEach((info) => {
+            const hasFileContext = info.fileName && row._sourceFile;
+            const isMatchingFile = !hasFileContext || row._sourceFile === info.fileName;
+
+            if (!isMatchingFile) {
+                return;
+            }
+
+            informative[info.columnName] = row[info.columnName];
+        });
+
+        row.__informative = informative;
+    });
 }
 
 /**
@@ -269,11 +306,11 @@ function renderContours(g, svg, validData, scales, columnInfo, config, settings,
 /**
  * Renders curve fits.
  */
-function renderCurveFits(g, fits, scales, dimensions, columnInfo, graphService, axisInfo = {}) {
+function renderCurveFits(g, fits, scales, dimensions, columnInfo, graphService, axisInfo = {}, config = {}) {
     if (!fits || fits.length === 0) return;
     const { xScale, yScale } = scales;
     const { width } = dimensions;
-    return graphService.drawCurveFits(g, fits, xScale, yScale, width, columnInfo.seriesInfo, axisInfo, dimensions);
+    return graphService.drawCurveFits(g, fits, xScale, yScale, width, columnInfo.seriesInfo, axisInfo, dimensions, config);
 }
 
 /**
@@ -309,13 +346,13 @@ function renderLegends(svg, validData, scales, columnInfo, config, dimensions, s
             svg, contour.contourInfo, contour.thresholds, contour.colorScale, settings.graphDimensions
         );
     }
-    // FIXME: uncomment these lines for curve fitting legend
-    // if (curve && Array.isArray(curve.legendItems) && curve.legendItems.length > 0) {
-    //     const fallbackWidth = (dimensions.width || 0) + (margin.left + margin.right);
-    //     graphService?.renderCurveFitLegend?.(
-    //         svg, curve.legendItems, axisInfo, dimensions, fallbackWidth
-    //     );
-    // }
+
+    // Per-series colour grading legends (floating panels in right margin)
+    if (scales.seriesColorScales) {
+        LegendRenderer.drawColorGradingLegends(
+            svg, seriesInfo, scales.seriesColorScales, validData, dimensions
+        );
+    }
 }
 
 /**
@@ -417,7 +454,9 @@ export function renderGraph({
             return { success: false, error: 'No valid data points' };
         }
 
-        const scales = createScales(validData, columnInfo, dimensions, targetGraphConfig, globalSettings);
+        attachInformativeFields(validData, targetGraphConfig);
+
+        const scales = createScales(validData, columnInfo, dimensions, targetGraphConfig);
 
         const g = svg
             .append('g')
@@ -431,7 +470,7 @@ export function renderGraph({
        
         renderDataSeries(g, validData, scales, columnInfo, targetGraphConfig, graphService);
         const contourLegend = renderContours(g, svg, validData, scales, columnInfo, targetGraphConfig, globalSettings, graphService) || null;
-        const curveLegend = renderCurveFits(g, curveFits, scales, dimensions, columnInfo, graphService, axisInfo) || { legendItems: [] };
+        const curveLegend = renderCurveFits(g, curveFits, scales, dimensions, columnInfo, graphService, axisInfo, targetGraphConfig) || { legendItems: [] };
          if (logoDataUri) {
             const { width } = dimensions;
             svg.append('image')

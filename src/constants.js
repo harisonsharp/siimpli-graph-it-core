@@ -14,7 +14,6 @@
  * @exports COLOR_SCHEMES - Available color palettes for data visualization
  * @exports DEFAULT_GRAPH_CONFIG - Default settings for new graphs
  * @exports DEFAULT_CURVE_FIT - Default parameters for curve fitting operations
- * @exports CURVE_FIT_COLORS - Color palette for multiple curve overlays
  *
  * @example
  * import { GRAPH_CONFIG, DEFAULT_CURVE_FIT } from './constants.js';
@@ -49,12 +48,6 @@ export const WATERMARK_CONFIG = {
     detectionThreshold: 0.58,
 };
 
-export const COLOR_SCHEMES = {
-    'warm-cool': 'RdYlBu',
-    'rainbow': 'Rainbow',
-    'green-red': 'RdYlGn'
-};
-
 export const DEFAULT_SERIES_CONFIG = {
     yAxis: '',
     graphType: 'scatter',
@@ -62,13 +55,25 @@ export const DEFAULT_SERIES_CONFIG = {
     titleName: '',
     color: '',
     strokeWidth: 2,
-
+    colorGrading: {
+        enabled: false,
+        mode: 'continuous',       // 'continuous' | 'distinct'
+        column: '',               // column id string, e.g. "colName::fileName"
+        scheme: 'warm-cool',      // for continuous: scheme name from ScaleFactory.COLOR_SCHEMES
+        categoryColors: {}        // for distinct: { [categoryValue]: hexColor }
+    }
 };
 
 export const DEFAULT_GRAPH_CONFIG = {
     xAxis: '',
+    informativeFields: [],
+    pdfLinking: {
+        enabled: false,
+        folderPath: '',
+        nameField: '',
+        fileType: 'pdf'
+    },
     series: [{ ...DEFAULT_SERIES_CONFIG }],
-    colorGrading: '',
     contouring: '',
     graphType: 'scatter', // Kept for backwards compatibility, but series-specific type is preferred
     barMode: 'group', // 'group' or 'stack'
@@ -87,7 +92,6 @@ export const DEFAULT_GRAPH_CONFIG = {
         y: { enabled: false, min: '', max: '', step: '' },
         y2: { enabled: false, min: '', max: '', step: '' }
     },
-    colorScheme: 'green-red',
     dualYAxis: false,
     yAxis2: '',
 };
@@ -96,6 +100,7 @@ export const DEFAULT_CURVE_FIT = {
     enabled: true,
     seriesIndex: 0,
     xMin: '',
+    color: '#ff6b6b',
     xMax: '',
     fitType: 'best_fit',
     order: 2,
@@ -104,4 +109,4 @@ export const DEFAULT_CURVE_FIT = {
     result: null
 };
 
-export const CURVE_FIT_COLORS = ['#ff6b6b', '#4ecdc4'];
+

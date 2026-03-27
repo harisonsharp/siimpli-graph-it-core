@@ -158,6 +158,12 @@ export const parseConfigFile = (configText) => {
         colorScheme: 'warm-cool',
         dualYAxis: false,
         yAxis2: '',
+        pdfLinking: {
+            enabled: false,
+            folderPath: '',
+            nameField: '',
+            fileType: 'pdf'
+        }
     };
 
     const lines = configText.split('\n').filter(line => line.trim());
@@ -198,6 +204,18 @@ export const parseConfigFile = (configText) => {
                 break;
             case 'yAxis2':
                 config.yAxis2 = value;
+                break;
+            case 'enablePdfLinking':
+                config.pdfLinking.enabled = value.toLowerCase() === 'true';
+                break;
+            case 'pdfFolderPath':
+                config.pdfLinking.folderPath = value;
+                break;
+            case 'pdfNameField':
+                config.pdfLinking.nameField = value;
+                break;
+            case 'pdfFileType':
+                config.pdfLinking.fileType = value?.toLowerCase() === 'json' ? 'json' : 'pdf';
                 break;
         }
     });

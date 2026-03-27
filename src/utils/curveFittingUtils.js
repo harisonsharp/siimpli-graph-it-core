@@ -26,10 +26,24 @@ const tokenise = (src) => {
                 num += src[i++];
             }
             tokens.push({ type: 'num', value: parseFloat(num) });
-        } else if (ch === 'x') {
-            tokens.push({ type: 'var', value: 'x' }); i++;
-        } else if (ch === 'y') {
-            tokens.push({ type: 'var', value: 'y' }); i++;
+        } else if (/[a-zA-Z_]/.test(ch)) {
+            let name = '';
+            while (i < src.length && /[a-zA-Z0-9_]/.test(src[i])) {
+                name += src[i++];
+            }
+            
+            // Handle some possible log spellings
+            if (name === 'log' && src[i] === '(' && src.startsWith('10)', i + 1)) {
+                // handles log(10)x case which might be parsed as log -> ( -> 10 -> )
+                // better to just parse it normally and fix it in parser or let it be.
+                // Wait, if it's "log(10)x", in the tokenizer it's "log", "(", "10", ")", "x"
+                // That might be tricky. Let's just tokenize it as func 'log' and we'll handle it.
+            }
+            
+            const lowerName = name.toLowerCase();
+            if (lowerName === 'x') tokens.push({ type: 'var', value: 'x' });
+            else if (lowerName === 'y') tokens.push({ type: 'var', value: 'y' });
+            else tokens.push({ type: 'func', value: lowerName });
         } else if ('+-*/^()'.includes(ch)) {
             tokens.push({ type: 'op', value: ch }); i++;
         } else {
@@ -105,6 +119,45 @@ const buildEvaluator = (tokens) => {
         const t = peek();
         if (!t) throw new Error('Unexpected end of expression');
         if (t.type === 'num') { consume(); const v = t.value; return () => v; }
+        if (t.type === 'func') {
+            consume();
+            // Handle log(10)y specifically since user might ask log(10)x meaning log10(x)
+            let isLog10 = false;
+            let bracketOpened = false;
+            if (t.value === 'log' && peek()?.value === '(') {
+                // Peek ahead to see if it's "10)"
+                if (pos + 2 < tokens.length && tokens[pos+1].type === 'num' && tokens[pos+1].value === 10 && tokens[pos+2].value === ')') {
+                    isLog10 = true;
+                    consume('(');
+                    consume(); // 10
+                    consume(')');
+                }
+            }
+            
+            // Now look for the actual argument, which may or may not be in parentheses
+            let arg;
+            if (peek()?.value === '(') {
+                consume('(');
+                arg = parseExpr();
+                consume(')');
+            } else {
+                // sometimes they just write `log10(x)` or `log10 x`
+                arg = parsePrimary();
+            }
+
+            const funcName = isLog10 ? 'log10' : t.value;
+            let mathFunc;
+            if (funcName === 'log10') mathFunc = Math.log10;
+            else if (funcName === 'log' || funcName === 'ln') mathFunc = Math.log;
+            else if (funcName === 'exp') mathFunc = Math.exp;
+            else if (funcName === 'sqrt') mathFunc = Math.sqrt;
+            else if (funcName === 'sin') mathFunc = Math.sin;
+            else if (funcName === 'cos') mathFunc = Math.cos;
+            else if (funcName === 'tan') mathFunc = Math.tan;
+            else throw new Error(`Unknown function: '${t.value}'`);
+            
+            return (x, y) => mathFunc(arg(x, y));
+        }
         if (t.type === 'var' && t.value === 'x') { consume(); return (x) => x; }
         if (t.type === 'var' && t.value === 'y') { consume(); return (_x, y) => y; }
         if (t.value === '(') {
@@ -126,17 +179,48 @@ const buildEvaluator = (tokens) => {
  * Compile an equation string to an evaluator function (x, y?) => number.
  * Throws a descriptive error if parsing fails.
  * @param {string} equation - e.g. "30.65 * x^(0.2286)"
- * @returns {Function}
+ * @returns {Function|Object}
  */
-export const compileEquation = (equation) => {
+export const compileEquation = (equation, returnMeta = false) => {
     if (!equation || typeof equation !== 'string') throw new Error('Equation must be a non-empty string');
-    const trimmed = equation.trim();
-    // Strip leading "y = " or "y=" prefix if present
-    const body = trimmed.replace(/^y\s*=\s*/i, '');
+    let trimmed = equation.trim();
+    
+    // Support finding left-hand side and right-hand side
+    let lhs = 'y';
+    let rhs = trimmed;
+    if (trimmed.includes('=')) {
+        const parts = trimmed.split('=');
+        lhs = parts[0].trim().toLowerCase().replace(/\s/g, '');
+        rhs = parts.slice(1).join('=').trim();
+    } else {
+        lhs = 'y';
+        rhs = trimmed.replace(/^y\s*=\s*/i, '');
+    }
+
     try {
-        return buildEvaluator(tokenise(body));
+        let evaluator = buildEvaluator(tokenise(rhs));
+        
+        let hasCustomLhs = false;
+        // If LHS is log10(y) or similar, we invert it so the evaluator still returns y for a given x
+        if (lhs === 'log10(y)' || lhs === 'log(10)y') {
+            const inner = evaluator;
+            evaluator = (x, y) => Math.pow(10, inner(x, y));
+            hasCustomLhs = true;
+        } else if (lhs === 'ln(y)' || lhs === 'log(y)' || lhs === 'loge(y)') {
+            const inner = evaluator;
+            evaluator = (x, y) => Math.exp(inner(x, y));
+            hasCustomLhs = true;
+        } else if (lhs !== 'y') {
+            throw new Error(`Unsupported left-hand side: '${lhs}'. Supported: 'y', 'log10(y)', 'ln(y)'.`);
+        }
+        
+        if (returnMeta) {
+            return { evaluator, originalLhs: lhs, originalRhs: rhs, hasCustomLhs };
+        }
+        
+        return evaluator;
     } catch (e) {
-        throw new Error(`Failed to parse equation "${body}": ${e.message}`);
+        throw new Error(`Failed to parse equation "${rhs}": ${e.message}`);
     }
 };
 
@@ -148,7 +232,8 @@ export const compileEquation = (equation) => {
  * @returns {{ coefficients: null, rSquared: number, equation: string, fitType: 'Custom', evaluator: Function }}
  */
 export const fitCustomEquation = (data, equationStr) => {
-    const evaluator = compileEquation(equationStr);
+    const compiled = compileEquation(equationStr, true);
+    const evaluator = compiled.evaluator;
 
     const validData = data.filter(p =>
         p && Number.isFinite(p.x) && Number.isFinite(p.y)
@@ -173,16 +258,15 @@ export const fitCustomEquation = (data, equationStr) => {
     }
 
     const rSquared = ssTot === 0 ? 1 : Math.max(0, Math.min(1, 1 - ssRes / ssTot));
-    // Normalise stored equation to y = ... form
-    const normalised = equationStr.trim().replace(/^y\s*=\s*/i, '');
 
     return {
         coefficients: null,
         evaluator,
         rSquared,
-        equation: `y = ${normalised}`,
+        equation: compiled.hasCustomLhs ? equationStr.trim() : `y = ${compiled.originalRhs}`,
         fitType: 'Custom',
-        dataPoints: validData.length
+        dataPoints: validData.length,
+        hasCustomLhs: compiled.hasCustomLhs
     };
 };
 
@@ -201,12 +285,20 @@ export const fitCustomEquation = (data, equationStr) => {
  * @param {Function} predictor  (x) => yHat
  * @returns {{ upperStd: number, lowerStd: number, n: number }}
  */
-export const computeAsymmetricResidualStd = (data, predictor) => {
+export const computeAsymmetricResidualStd = (data, predictor, isLogY = false) => {
     const posRes = [], negRes = [];
     for (const p of data) {
         const yHat = predictor(p.x);
         if (!Number.isFinite(yHat)) continue;
-        const r = p.y - yHat;
+        if (isLogY && (p.y <= 0 || yHat <= 0)) continue;
+        
+        let r;
+        if (isLogY) {
+            r = Math.log10(p.y) - Math.log10(yHat);
+        } else {
+            r = p.y - yHat;
+        }
+        
         if (r >= 0) posRes.push(r);
         else negRes.push(r);
     }
@@ -241,14 +333,14 @@ export const computeAsymmetricResidualStd = (data, predictor) => {
  * @param {number}   nBins      number of quantile bins (default 8)
  * @returns {{ upperStdAt: (x:number)=>number, lowerStdAt: (x:number)=>number }}
  */
-const buildLocalStdFunctions = (data, predictor, nBins = 8) => {
+const buildLocalStdFunctions = (data, predictor, nBins = 8, isLogY = false) => {
     const valid = data
         .filter(p => Number.isFinite(p.x) && Number.isFinite(p.y) && Number.isFinite(predictor(p.x)))
         .sort((a, b) => a.x - b.x);
 
     if (valid.length < 4) {
         // Fall back to global std when there is too little data to bin
-        const { upperStd, lowerStd } = computeAsymmetricResidualStd(valid, predictor);
+        const { upperStd, lowerStd } = computeAsymmetricResidualStd(valid, predictor, isLogY);
         return { upperStdAt: () => upperStd, lowerStdAt: () => lowerStd };
     }
 
@@ -260,7 +352,7 @@ const buildLocalStdFunctions = (data, predictor, nBins = 8) => {
     for (let b = 0; b < actualBins; b++) {
         const slice = valid.slice(b * binSize, (b + 1) * binSize);
         if (slice.length === 0) continue;
-        const { upperStd, lowerStd } = computeAsymmetricResidualStd(slice, predictor);
+        const { upperStd, lowerStd } = computeAsymmetricResidualStd(slice, predictor, isLogY);
         const cx = slice.reduce((s, p) => s + p.x, 0) / slice.length;
         centres.push(cx);
         upperStds.push(upperStd);
@@ -308,22 +400,22 @@ const buildLocalStdFunctions = (data, predictor, nBins = 8) => {
  * @param {string}   [bandConfig.lowerExpr]        - e.g. "y * 0.793"  (expression mode)
  * @returns {{ upperBandPoints: Array, lowerBandPoints: Array, upperStdPct: number|null, lowerStdPct: number|null }}
  */
-export const generateConfidenceBandPoints = (mainPoints, rawData, predictor, bandConfig) => {
+export const generateConfidenceBandPoints = (mainPoints, rawData, predictor, bandConfig, isLogY = false) => {
     const { mode, nStdDev, nBins, upperExpr, lowerExpr } = bandConfig;
 
     let upperOffset, lowerOffset;
 
     if (mode === 'stddev') {
         const n = typeof nStdDev === 'number' && isFinite(nStdDev) ? nStdDev : 1;
-        const { upperStd, lowerStd } = computeAsymmetricResidualStd(rawData, predictor);
-        upperOffset = (_x, y) => y + n * upperStd;
-        lowerOffset = (_x, y) => y - n * lowerStd;
+        const { upperStd, lowerStd } = computeAsymmetricResidualStd(rawData, predictor, isLogY);
+        upperOffset = (_x, y) => isLogY ? y * Math.pow(10, n * upperStd) : y + n * upperStd;
+        lowerOffset = (_x, y) => isLogY ? y * Math.pow(10, -n * lowerStd) : y - n * lowerStd;
     } else if (mode === 'local_stddev') {
         const n = typeof nStdDev === 'number' && isFinite(nStdDev) ? nStdDev : 1;
         const bins = typeof nBins === 'number' && nBins >= 2 ? Math.round(nBins) : 8;
-        const { upperStdAt, lowerStdAt } = buildLocalStdFunctions(rawData, predictor, bins);
-        upperOffset = (x, y) => y + n * upperStdAt(x);
-        lowerOffset = (x, y) => y - n * lowerStdAt(x);
+        const { upperStdAt, lowerStdAt } = buildLocalStdFunctions(rawData, predictor, bins, isLogY);
+        upperOffset = (x, y) => isLogY ? y * Math.pow(10, n * upperStdAt(x)) : y + n * upperStdAt(x);
+        lowerOffset = (x, y) => isLogY ? y * Math.pow(10, -n * lowerStdAt(x)) : y - n * lowerStdAt(x);
     } else if (mode === 'expression') {
         const upperFn = upperExpr ? compileEquation(upperExpr) : null;
         const lowerFn = lowerExpr ? compileEquation(lowerExpr) : null;
@@ -345,11 +437,17 @@ export const generateConfidenceBandPoints = (mainPoints, rawData, predictor, ban
     // (for display in the result panel — mirrors the example: "Upper std = 23.5 %")
     let upperStdPct = null, lowerStdPct = null;
     if ((mode === 'stddev' || mode === 'local_stddev') && rawData.length > 0) {
-        const { upperStd, lowerStd } = computeAsymmetricResidualStd(rawData, predictor);
-        const meanYhat = mainPoints.reduce((s, p) => s + p.y, 0) / (mainPoints.length || 1);
-        if (Number.isFinite(meanYhat) && meanYhat !== 0) {
-            upperStdPct = (upperStd / meanYhat) * 100;
-            lowerStdPct = (lowerStd / meanYhat) * 100;
+        const { upperStd, lowerStd } = computeAsymmetricResidualStd(rawData, predictor, isLogY);
+        
+        if (isLogY) {
+            upperStdPct = (Math.pow(10, upperStd) - 1) * 100;
+            lowerStdPct = (1 - Math.pow(10, -lowerStd)) * 100;
+        } else {
+            const meanYhat = mainPoints.reduce((s, p) => s + p.y, 0) / (mainPoints.length || 1);
+            if (Number.isFinite(meanYhat) && meanYhat !== 0) {
+                upperStdPct = (upperStd / meanYhat) * 100;
+                lowerStdPct = (lowerStd / meanYhat) * 100;
+            }
         }
     }
 
@@ -808,7 +906,7 @@ export const findBestFit = (data) => {
     return bestFit;
 };
 
-export const generateCurvePoints = (fit, xMin, xMax, numPoints = 100) => {
+export const generateCurvePoints = (fit, xMin, xMax, numPoints = 100, isLogX = false) => {
     if (!fit || (!fit.coefficients && fit.fitType !== 'Custom')) {
         throw new Error('Invalid fit object');
     }
@@ -818,10 +916,21 @@ export const generateCurvePoints = (fit, xMin, xMax, numPoints = 100) => {
     }
 
     const points = [];
-    const step = (xMax - xMin) / numPoints;
+    
+    // For logX, generate points evenly spaced in logarithmic space for a smooth curve
+    let generateX;
+    if (isLogX && xMin > 0 && xMax > 0) {
+        const logMin = Math.log10(xMin);
+        const logMax = Math.log10(xMax);
+        const step = (logMax - logMin) / numPoints;
+        generateX = (i) => Math.pow(10, logMin + (step * i));
+    } else {
+        const step = (xMax - xMin) / numPoints;
+        generateX = (i) => xMin + (step * i);
+    }
 
     for (let i = 0; i <= numPoints; i++) {
-        const x = xMin + (step * i);
+        const x = generateX(i);
         let y;
 
         try {
@@ -1007,7 +1116,7 @@ export const performCurveFitting = (csvData, config, curveFits) => {
             }
 
             // Generate curve points for visualization
-            const curvePoints = generateCurvePoints(fitResult, xMin, xMax);
+            const curvePoints = generateCurvePoints(fitResult, xMin, xMax, 100, config?.logX);
 
             // Build a predictor function for band calculations
             const predictor = fitResult.fitType === 'Custom'
@@ -1022,7 +1131,7 @@ export const performCurveFitting = (csvData, config, curveFits) => {
                 confidenceBands = curveFit.confidenceBands.bands.map((band, bandIdx) => {
                     try {
                         return {
-                            ...generateConfidenceBandPoints(curvePoints, rangeData, predictor, band),
+                            ...generateConfidenceBandPoints(curvePoints, rangeData, predictor, band, config?.logY),
                             color: band.color || curveFit.color,
                             label: band.label || `Band ${bandIdx + 1}`
                         };
@@ -1035,10 +1144,65 @@ export const performCurveFitting = (csvData, config, curveFits) => {
 
             debugLog(`Successfully fitted curve ${index + 1}:`, fitResult);
 
+            let displayEquation = fitResult.equation;
+            
+            // Convert equation string from f(x) to log(f(x)) if logY is enabled
+            if (config?.logY) {
+                if (fitResult.fitType === 'Power Law') {
+                    const [a, power] = fitResult.coefficients;
+                    // ... (Power Law formatting remains) ... Wait, I'll rewrite this cleanly
+                    const logA = Math.log10(a);
+                    
+                    const formatVal = (val) => {
+                        const absVal = Math.abs(val);
+                        const isNeg = val < 0;
+                        let formatted = '';
+                        if (absVal >= 1e-1 && absVal < 1e4) {
+                            formatted = absVal.toFixed(3);
+                        } else {
+                            formatted = absVal.toExponential(3);
+                        }
+                        return (isNeg ? '-' : '') + formatted;
+                    };
+                    
+                    const aStr = formatVal(logA);
+                    const sign = power >= 0 ? '+' : '-';
+                    const powerAmt = Math.abs(power);
+                    let powerStr = '';
+                    if (powerAmt >= 1e-1 && powerAmt < 1e4) {
+                        powerStr = powerAmt.toFixed(3);
+                    } else {
+                        powerStr = powerAmt.toExponential(3);
+                    }
+                    
+                    displayEquation = `log10(y) = ${aStr} ${sign} ${powerStr} * log10(x)`;
+                } else if (fitResult.fitType === 'Custom' && fitResult.hasCustomLhs) {
+                    // For a custom equation that already specified log on its LHS,
+                    // we show it identically as provided since it inherently maps cleanly
+                    displayEquation = fitResult.equation; 
+                } else if (displayEquation.startsWith('y = ')) {
+                    const rhs = displayEquation.substring(4);
+                    displayEquation = `log10(y) = log10(${rhs})`;
+                }
+            } else if (!config?.logY && fitResult.fitType === 'Custom' && fitResult.hasCustomLhs) {
+                // In linear space, if the user provided log10(y) = X, we should ideally express it as y = 10^(X)
+                const parts = fitResult.equation.split('=');
+                if (parts.length === 2) {
+                    const lhsStr = parts[0].trim().toLowerCase().replace(/\s/g, '');
+                    const rhs = parts[1].trim();
+                     if (lhsStr === 'log10(y)' || lhsStr === 'log(10)y') {
+                        displayEquation = `y = 10^(${rhs})`;
+                     } else if (lhsStr === 'ln(y)' || lhsStr === 'log(y)' || lhsStr === 'loge(y)') {
+                        displayEquation = `y = e^(${rhs})`;
+                     }
+                }
+            }
+
             return {
                 ...curveFit,
                 result: {
                     ...fitResult,
+                    equation: displayEquation,
                     curvePoints,
                     confidenceBands,
                     xMin,

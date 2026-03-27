@@ -54,7 +54,7 @@ export class GraphCompositionRenderer {
      * @param {Object} graphConfig - Graph configuration
      * @param {Function} seriesColorScale - Series color mapping function
      */
-    drawDataSeries(g, validData, xScale, yScale, xAxisInfo, seriesInfo, colorScale, colorInfo, graphConfig, seriesColorScale) {
+    drawDataSeries(g, validData, xScale, yScale, xAxisInfo, seriesInfo, colorScale, colorInfo, graphConfig, seriesColorScale, seriesColorScales = null) {
         const isDualAxis = yScale && typeof yScale === 'object' && yScale.primary && yScale.secondary;
         const graphType = (graphConfig?.graphType || 'scatter').toLowerCase();
 
@@ -70,18 +70,18 @@ export class GraphCompositionRenderer {
 
         if (primarySeries.length > 0) {
             const primaryYScale = isDualAxis ? yScale.primary : yScale;
-            this.renderSeriesGroup(g, validData, xScale, primaryYScale, xAxisInfo, primarySeries, colorScale, colorInfo, graphConfig, seriesColorScale);
+            this.renderSeriesGroup(g, validData, xScale, primaryYScale, xAxisInfo, primarySeries, graphConfig, seriesColorScale, seriesColorScales);
         }
 
         if (isDualAxis && secondarySeries.length > 0) {
-            this.renderSeriesGroup(g, validData, xScale, yScale.secondary, xAxisInfo, secondarySeries, colorScale, colorInfo, graphConfig, seriesColorScale);
+            this.renderSeriesGroup(g, validData, xScale, yScale.secondary, xAxisInfo, secondarySeries, graphConfig, seriesColorScale, seriesColorScales);
         }
     }
 
     /**
      * Render a group of series on the same axis
      */
-    renderSeriesGroup(g, validData, xScale, yScale, xAxisInfo, seriesInfo, colorScale, colorInfo, graphConfig, seriesColorScale) {
+    renderSeriesGroup(g, validData, xScale, yScale, xAxisInfo, seriesInfo, graphConfig, seriesColorScale, seriesColorScales = null) {
         const scales = { xScale, yScale };
         const graphType = (graphConfig?.graphType || 'scatter').toLowerCase();
 
@@ -89,8 +89,17 @@ export class GraphCompositionRenderer {
         const otherSeries = seriesInfo.filter(s => (s.graphType || graphType) !== 'bar');
 
         if (barSeries.length > 0) {
+            // Build a gradingMap for bar series: Map<columnName, { colorScale, colorInfo }>
+            const gradingMap = new Map();
+            barSeries.forEach(s => {
+                const globalIdx = graphConfig.series.findIndex(
+                    cfg => cfg.yAxis === s.yAxis && cfg.axisAssignment === s.axisAssignment
+                );
+                const grading = seriesColorScales?.[globalIdx] ?? null;
+                if (grading) gradingMap.set(s.yAxisInfo.columnName, grading);
+            });
             const barRenderer = ChartRendererFactory.createRenderer('bar', { mode: graphConfig.barMode || 'group' });
-            barRenderer.render(g, validData, scales, xAxisInfo, barSeries, graphConfig, seriesColorScale);
+            barRenderer.render(g, validData, scales, xAxisInfo, barSeries, graphConfig, seriesColorScale, gradingMap.size > 0 ? gradingMap : null);
         }
 
         otherSeries.forEach((series, i) => {
@@ -132,11 +141,10 @@ export class GraphCompositionRenderer {
             const renderer = ChartRendererFactory.createRendererSafe(seriesGraphType);
             const seriesColor = seriesColorScale ? seriesColorScale(yAxisInfo.columnName) : null;
 
-            const targetIndex = graphConfig.colorGradingTarget !== undefined ? parseInt(graphConfig.colorGradingTarget, 10) : 0;
             const globalIndex = graphConfig.series.findIndex(s => s.yAxis === series.yAxis && s.axisAssignment === series.axisAssignment);
-
-            const useColorScale = (globalIndex === targetIndex) ? colorScale : null;
-            const useColorInfo = (globalIndex === targetIndex) ? colorInfo : null;
+            const seriesGrading = seriesColorScales?.[globalIndex] ?? null;
+            const useColorScale = seriesGrading?.colorScale ?? null;
+            const useColorInfo = seriesGrading?.colorInfo ?? null;
 
             const seriesGroup = g.append('g').attr('class', `series-group-${i}`);
 
@@ -199,7 +207,7 @@ export class GraphCompositionRenderer {
     /**
      * Render curve fit trend lines
      */
-    drawCurveFits(g, curveFits, xScale, yScale, _width, seriesInfo = [], _axisInfo = {}, _dimensions = {}) {
+    drawCurveFits(g, curveFits, xScale, yScale, _width, seriesInfo = [], _axisInfo = {}, _dimensions = {}, config = {}) {
         const isDualAxis = yScale && typeof yScale === 'object' && yScale.primary && yScale.secondary;
         const isMultiYScale = Array.isArray(yScale);
         const equationItems = [];
@@ -284,17 +292,21 @@ export class GraphCompositionRenderer {
                 }
             }
 
+            const SAFE_LIMIT = 5000;
+            
             const line = d3.line()
                 .curve(d3.curveBasis)
                 .x(d => {
-                    const xValue = effectiveXScale(d.x);
-                    if (Number.isNaN(xValue)) debugWarn(`Invalid x value for curve fit ${index}:`, d.x);
-                    return xValue;
+                    const mappedX = config?.logX && d.x > 0 ? Math.log10(d.x) : d.x;
+                    const xValue = effectiveXScale(mappedX);
+                    if (Number.isNaN(xValue)) return 0;
+                    return Math.max(-SAFE_LIMIT, Math.min(plotWidth + SAFE_LIMIT, xValue));
                 })
                 .y(d => {
-                    const yValue = thisYScale(d.y);
-                    if (Number.isNaN(yValue)) debugWarn(`Invalid y value for curve fit ${index}:`, d.y);
-                    return yValue;
+                    const mappedY = config?.logY && d.y > 0 ? Math.log10(d.y) : d.y;
+                    const yValue = thisYScale(mappedY);
+                    if (Number.isNaN(yValue)) return 0;
+                    return Math.max(-SAFE_LIMIT, Math.min(plotHeight + SAFE_LIMIT, yValue));
                 });
 
             // Clamp points to both axis domains so the curve never escapes the plot area.
@@ -311,14 +323,17 @@ export class GraphCompositionRenderer {
 
             const validPoints = curveFit.result.curvePoints.filter(d => {
                 const xNum = +d.x;
+                const mappedX = config?.logX && xNum > 0 ? Math.log10(xNum) : xNum;
+                const mappedY = config?.logY && d.y > 0 ? Math.log10(d.y) : d.y;
+                
                 // Clamp to x domain only — curves may extend beyond the y data range
                 // (e.g. with a static Y scale). Out-of-bounds y values are handled by
                 // the clipPath applied to the rendered paths above.
                 return Number.isFinite(xNum) &&
                     Number.isFinite(d.y) &&
-                    !Number.isNaN(effectiveXScale(xNum)) &&
-                    !Number.isNaN(thisYScale(d.y)) &&
-                    xNum >= xDomMin && xNum <= xDomMax;
+                    !Number.isNaN(effectiveXScale(mappedX)) &&
+                    !Number.isNaN(thisYScale(mappedY)) &&
+                    mappedX >= xDomMin && mappedX <= xDomMax;
             });
 
             if (validPoints.length === 0) {
@@ -335,26 +350,44 @@ export class GraphCompositionRenderer {
 
                     // Pair upper/lower points by x-index for the area generator
                     const n = Math.min(band.upperBandPoints.length, band.lowerBandPoints.length);
-                    const pairedPoints = Array.from({ length: n }, (_, i) => ({
-                        x: band.upperBandPoints[i].x,
-                        y1: band.upperBandPoints[i].y,
-                        y0: band.lowerBandPoints[i].y
-                    })).filter(p =>
-                        !Number.isNaN(effectiveXScale(p.x)) &&
-                        !Number.isNaN(thisYScale(p.y1)) &&
-                        !Number.isNaN(thisYScale(p.y0)) &&
-                        p.x >= xDomMin && p.x <= xDomMax &&
-                        p.y1 >= yDomMin && p.y1 <= yDomMax &&
-                        p.y0 >= yDomMin && p.y0 <= yDomMax
-                    );
+                    const pairedPoints = Array.from({ length: n }, (_, i) => {
+                        const p = {
+                            x: band.upperBandPoints[i].x,
+                            y1: band.upperBandPoints[i].y,
+                            y0: band.lowerBandPoints[i].y
+                        };
+                        return p;
+                    }).filter(p => {
+                        const mappedX = config?.logX && p.x > 0 ? Math.log10(p.x) : p.x;
+                        const mappedY0 = config?.logY && p.y0 > 0 ? Math.log10(p.y0) : p.y0;
+                        const mappedY1 = config?.logY && p.y1 > 0 ? Math.log10(p.y1) : p.y1;
+                        return !Number.isNaN(effectiveXScale(mappedX)) &&
+                            !Number.isNaN(thisYScale(mappedY1)) &&
+                            !Number.isNaN(thisYScale(mappedY0)) &&
+                            mappedX >= xDomMin && mappedX <= xDomMax &&
+                            mappedY1 >= yDomMin && mappedY1 <= yDomMax &&
+                            mappedY0 >= yDomMin && mappedY0 <= yDomMax;
+                    });
 
                     if (pairedPoints.length === 0) return;
 
                     const area = d3.area()
                         .curve(d3.curveBasis)
-                        .x(d => effectiveXScale(d.x))
-                        .y0(d => thisYScale(d.y0))
-                        .y1(d => thisYScale(d.y1));
+                        .x(d => {
+                            const mappedX = config?.logX && d.x > 0 ? Math.log10(d.x) : d.x;
+                            const xVal = effectiveXScale(mappedX);
+                            return Number.isNaN(xVal) ? 0 : Math.max(-SAFE_LIMIT, Math.min(plotWidth + SAFE_LIMIT, xVal));
+                        })
+                        .y0(d => {
+                            const mappedY = config?.logY && d.y0 > 0 ? Math.log10(d.y0) : d.y0;
+                            const yVal = thisYScale(mappedY);
+                            return Number.isNaN(yVal) ? 0 : Math.max(-SAFE_LIMIT, Math.min(plotHeight + SAFE_LIMIT, yVal));
+                        })
+                        .y1(d => {
+                            const mappedY = config?.logY && d.y1 > 0 ? Math.log10(d.y1) : d.y1;
+                            const yVal = thisYScale(mappedY);
+                            return Number.isNaN(yVal) ? 0 : Math.max(-SAFE_LIMIT, Math.min(plotHeight + SAFE_LIMIT, yVal));
+                        });
 
                     bandRenderData.push({
                         points: pairedPoints,
@@ -366,10 +399,11 @@ export class GraphCompositionRenderer {
                 });
             }
 
-            renderData.push({
+            renderData.push({ // TODO: add stroke width
                 points: validPoints,
                 line,
                 color: curveFit.color,
+                strokeWidth: curveFit.strokeWidth,
                 index,
                 equation: curveFit.result.equation,
                 rSquared: curveFit.result.rSquared,
@@ -408,6 +442,7 @@ export class GraphCompositionRenderer {
             .attr("fill", "none")
             .attr("stroke", d => d.color)
             .attr("stroke-width", 3)
+            .attr("stroke-width", d => d.strokeWidth)
             .attr("stroke-dasharray", d => d.index === 0 ? "none" : "5,5")
             .attr("d", d => d.line(d.points))
             .attr("clip-path", clipAttr ? clipAttr : null);

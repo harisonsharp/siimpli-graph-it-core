@@ -112,8 +112,10 @@ export class ScatterChartRenderer extends BaseChartRenderer {
                 // Band scale - position at center of band
                 return xScale(xValue) + xScale.bandwidth() / 2;
             } else {
-                // Linear scale - direct mapping
-                return xScale(parseNumber(xValue));
+                // Linear scale - pre-transform to log space if logX is active
+                const raw = parseNumber(xValue);
+                const mapped = config?.logX ? Math.log10(raw) : raw;
+                return xScale(mapped);
             }
         };
 
@@ -136,14 +138,24 @@ export class ScatterChartRenderer extends BaseChartRenderer {
         // Hoist d3.symbol generator — creating it once avoids N object allocations
         const symbolGen = d3.symbol().size(symbolArea);
 
+        // When grading is active, each point needs its own colour; otherwise resolve once for the series.
+        const hasColorGrading = colorScale && colorInfo?.columnName;
+        const resolvedFill = hasColorGrading
+            ? null
+            : this.getPointColor(validData[0], colorScale, colorInfo, config, seriesColor);
+
         for (let i = 0; i < n; i++) {
             const d = validData[i];
             const symType = (symbolMap && filterColumn)
                 ? SymbolFactory.getSymbol(d[filterColumn], symbolMap)
                 : d3.symbolCircle;
             symbolPaths[i] = symbolGen.type(symType)();
-            transforms[i] = `translate(${getXPosition(d)},${yScale(parseNumber(d[yColName]))})`;
-            fills[i] = this.getPointColor(d, colorScale, colorInfo, config, seriesColor);
+            const rawY = parseNumber(d[yColName]);
+            const mappedY = config?.logY ? Math.log10(rawY) : rawY;
+            transforms[i] = `translate(${getXPosition(d)},${yScale(mappedY)})`;
+            fills[i] = hasColorGrading
+                ? this.getPointColor(d, colorScale, colorInfo, config, seriesColor)
+                : resolvedFill;
         }
 
         // Render points — attribute callbacks now just index into pre-computed arrays
@@ -159,19 +171,25 @@ export class ScatterChartRenderer extends BaseChartRenderer {
             .style('stroke', '#000')
             .style('stroke-width', 0.5);
 
-        // Skip <title> tooltip nodes in headless/batch mode — they add 10k DOM nodes
-        // that only work in interactive SVG and are ignored by the PNG rasterizer.
-        if (!isBatchMode) {
-            dots.append('title')
-                .text(d => {
-                    let text = `${xAxisInfo.columnName}: ${d[xAxisInfo.columnName]}\n${yColName}: ${d[yColName]}`;
-                    if (filterColumn) {
-                        text += `\n${filterColumn}: ${d[filterColumn]}`;
-                    }
-                    return text;
-                });
-        }
+        dots
+            .on('mouseenter', (event, d) => {
+                this.cancelPointHoverHide(g);
+                this.showPointHoverModal(g, event, d, { seriesName: yColName, graphConfig: config });
+            })
+            .on('mousemove', () => {
+                this.cancelPointHoverHide(g);
+            })
+            .on('mouseleave', (event) => {
+                if (event.relatedTarget?.closest?.(`.${BaseChartRenderer.HOVER_MODAL_CLASS}`)) {
+                    return;
+                }
+                this.schedulePointHoverHide(g, 500);
+            })
+            .on('click', (_event, d) => {
+                void this.openLinkedResourceForPoint(d, config);
+            });
 
+       
         console.log('Scatter chart rendered successfully', n);
     }
 

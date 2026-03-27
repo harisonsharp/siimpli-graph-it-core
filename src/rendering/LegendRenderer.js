@@ -99,6 +99,152 @@ export class LegendRenderer {
     }
 
     /**
+     * Draws floating per-series colour grading legend panels.
+     * One panel per series that has colorGrading.enabled === true.
+     * Panels are stacked vertically in the right margin area.
+     *
+     * @param {d3.Selection} svg - Root SVG selection
+     * @param {Array} seriesInfo - Parsed series info array (each entry has .colorGrading and .yAxisInfo)
+     * @param {Array} seriesColorScales - Per-series grading objects: Array<{colorScale, colorInfo, mode}|null>
+     * @param {Array} validData - Filtered valid data (for extracting color column values)
+     * @param {Object} dimensions - { width, height, margin }
+     */
+    static drawColorGradingLegends(svg, seriesInfo, seriesColorScales, validData, dimensions) {
+        if (!seriesInfo || !seriesColorScales) return;
+        const { width, height, margin } = dimensions;
+        const panelX = margin.left + width + 12;
+        const panelWidth = 160;
+        let panelY = margin.top;
+
+        seriesInfo.forEach((series, i) => {
+            const grading = seriesColorScales[i];
+            if (!grading) return;
+
+            const { colorScale, colorInfo, mode } = grading;
+            if (!colorScale || !colorInfo?.columnName) return;
+
+            const seriesLabel = series.titleName || series.yAxisInfo?.columnName || `Series ${i + 1}`;
+            const colLabel = colorInfo.columnName;
+
+            if (mode === 'distinct') {
+                // --- Discrete panel ---
+                const colorValues = validData
+                    .map(d => d[colorInfo.columnName])
+                    .filter(v => v !== undefined && v !== null && v !== '');
+                const uniqueValues = [...new Set(colorValues)];
+                if (uniqueValues.length === 0) return;
+
+                const rowH = 18;
+                const headerH = 28;
+                const panelH = headerH + uniqueValues.length * rowH + 10;
+
+                const panel = svg.append('g').attr('class', 'color-grading-legend');
+                panel.append('rect')
+                    .attr('x', panelX).attr('y', panelY)
+                    .attr('width', panelWidth).attr('height', panelH)
+                    .attr('rx', 6).attr('ry', 6)
+                    .attr('fill', '#fff').attr('fill-opacity', 0.95)
+                    .attr('stroke', '#d1d5db').attr('stroke-width', 1);
+
+                panel.append('text')
+                    .attr('x', panelX + 8).attr('y', panelY + 11)
+                    .attr('font-size', 10).attr('font-weight', 600)
+                    .attr('font-family', 'Inter, sans-serif').attr('fill', '#1e293b')
+                    .text(seriesLabel);
+
+                panel.append('text')
+                    .attr('x', panelX + 8).attr('y', panelY + 22)
+                    .attr('font-size', 9).attr('font-family', 'Inter, sans-serif')
+                    .attr('fill', '#64748b')
+                    .text(colLabel);
+
+                uniqueValues.forEach((val, j) => {
+                    const rowY = panelY + headerH + j * rowH;
+                    panel.append('rect')
+                        .attr('x', panelX + 8).attr('y', rowY)
+                        .attr('width', 12).attr('height', 12)
+                        .attr('rx', 2).attr('ry', 2)
+                        .attr('fill', colorScale(val));
+                    panel.append('text')
+                        .attr('x', panelX + 24).attr('y', rowY + 10)
+                        .attr('font-size', 9).attr('font-family', 'Inter, sans-serif')
+                        .attr('fill', '#334155')
+                        .text(String(val).length > 16 ? String(val).slice(0, 15) + '…' : String(val));
+                });
+
+                panelY += panelH + 8;
+            } else {
+                // --- Continuous gradient panel ---
+                const colorValues = validData
+                    .map(d => d[colorInfo.columnName])
+                    .filter(v => v !== undefined && v !== null && v !== '' && typeof v === 'number');
+                if (colorValues.length === 0) return;
+
+                const extent = [Math.min(...colorValues), Math.max(...colorValues)];
+                const gradientId = `cg-gradient-${i}-${Date.now()}`;
+                const barW = panelWidth - 16;
+                const panelH = 62;
+
+                const defs = svg.select('defs').empty() ? svg.append('defs') : svg.select('defs');
+                const gradient = defs.append('linearGradient')
+                    .attr('id', gradientId)
+                    .attr('x1', '0%').attr('x2', '100%');
+
+                for (let s = 0; s <= 20; s++) {
+                    const t = s / 20;
+                    const val = extent[0] + t * (extent[1] - extent[0]);
+                    gradient.append('stop')
+                        .attr('offset', `${t * 100}%`)
+                        .attr('stop-color', colorScale(val));
+                }
+
+                const panel = svg.append('g').attr('class', 'color-grading-legend');
+                panel.append('rect')
+                    .attr('x', panelX).attr('y', panelY)
+                    .attr('width', panelWidth).attr('height', panelH)
+                    .attr('rx', 6).attr('ry', 6)
+                    .attr('fill', '#fff').attr('fill-opacity', 0.95)
+                    .attr('stroke', '#d1d5db').attr('stroke-width', 1);
+
+                panel.append('text')
+                    .attr('x', panelX + 8).attr('y', panelY + 11)
+                    .attr('font-size', 10).attr('font-weight', 600)
+                    .attr('font-family', 'Inter, sans-serif').attr('fill', '#1e293b')
+                    .text(seriesLabel);
+
+                panel.append('text')
+                    .attr('x', panelX + 8).attr('y', panelY + 22)
+                    .attr('font-size', 9).attr('font-family', 'Inter, sans-serif')
+                    .attr('fill', '#64748b')
+                    .text(colLabel);
+
+                panel.append('rect')
+                    .attr('x', panelX + 8).attr('y', panelY + 28)
+                    .attr('width', barW).attr('height', 14)
+                    .attr('rx', 3)
+                    .attr('fill', `url(#${gradientId})`);
+
+                const fmt = v => (Math.abs(v) >= 1000 || (v !== 0 && Math.abs(v) < 0.01))
+                    ? v.toExponential(2)
+                    : v.toPrecision(4).replace(/\.?0+$/, '');
+
+                panel.append('text')
+                    .attr('x', panelX + 8).attr('y', panelY + 56)
+                    .attr('font-size', 9).attr('font-family', 'Inter, sans-serif')
+                    .attr('fill', '#475569').text(fmt(extent[0]));
+
+                panel.append('text')
+                    .attr('x', panelX + panelWidth - 8).attr('y', panelY + 56)
+                    .attr('text-anchor', 'end')
+                    .attr('font-size', 9).attr('font-family', 'Inter, sans-serif')
+                    .attr('fill', '#475569').text(fmt(extent[1]));
+
+                panelY += panelH + 8;
+            }
+        });
+    }
+
+    /**
      * Draws the contour level legend.
      */
     static drawContourLegend(svg, contourInfo, thresholds, contourColorScale, graphDimensions) {

@@ -80,15 +80,20 @@ export class HistogramRenderer extends BaseChartRenderer {
         const { xScale, yScale } = scales;
 
         // Extract numeric values from the column
-        const values = data
+        const rawValues = data
             .map(d => {
                 const val = +d[xAxisInfo.columnName];
-                if (isNaN(val)) {
-                    // debugLog('[HistogramRenderer] Invalid value for column', xAxisInfo.columnName, ':', d[xAxisInfo.columnName]);
-                }
                 return val;
             })
             .filter(v => !isNaN(v) && isFinite(v));
+
+        // For log X: filter out non-positive values and bin in log10 space so bars
+        // are geometrically (not linearly) spaced. Bin boundaries are then back-transformed
+        // to raw space so xScale (a log scale) maps them correctly to pixels.
+        const logX = config?.logX;
+        const values = logX
+            ? rawValues.filter(v => v > 0).map(v => Math.log10(v))
+            : rawValues;
 
         debugLog('[HistogramRenderer] Extracted values:', {
             totalValues: values.length,
@@ -102,18 +107,35 @@ export class HistogramRenderer extends BaseChartRenderer {
             return;
         }
 
-        // Generate bins using custom binning algorithm
-        const bins = generateCustomBins(values);
+        // Generate bins using custom binning algorithm (override if user specified numBins)
+        const numBinsOverride = config?.numBins ? Number(config.numBins) : null;
+        let bins = generateCustomBins(values, numBinsOverride);
+
+        // Back-transform bin boundaries from log10 space to raw space
+        if (logX) {
+            bins = bins.map(b => ({
+                ...b,
+                min: 10 ** b.min,
+                max: 10 ** b.max,
+            }));
+        }
+
         const normalBins = bins.filter(b => !b.isOutlierBin);
         const outlierBins = bins.filter(b => b.isOutlierBin);
 
         // Render normal bins
-        this.renderNormalBins(g, normalBins, xScale, yScale);
+        const logY = config?.logY;
+        this.renderNormalBins(g, normalBins, xScale, yScale, logY);
 
         // Render outlier bin if present and enabled
         if (this.showOutliers && outlierBins.length > 0 && normalBins.length > 0) {
-            this.renderOutlierBin(g, outlierBins[0], normalBins, xScale, yScale);
+            this.renderOutlierBin(g, outlierBins[0], normalBins, xScale, yScale, logY);
         }
+
+        // Render stats table below the chart
+        const outlierCount = outlierBins.reduce((sum, b) => sum + b.values.length, 0);
+        const binWidth = normalBins.length > 0 ? (normalBins[0].max - normalBins[0].min) : 0;
+        this.renderStatsTable(g, yScale, binWidth, outlierCount, logY);
     }
 
     /**
@@ -123,22 +145,32 @@ export class HistogramRenderer extends BaseChartRenderer {
      * @param {d3.Scale} xScale - X-axis scale
      * @param {d3.Scale} yScale - Y-axis scale
      */
-    renderNormalBins(g, bins, xScale, yScale) {
+    renderNormalBins(g, bins, xScale, yScale, logY = false) {
+        const yRange = yScale.range();
+        const chartBottom = Math.max(...yRange);
+
         g.selectAll('rect.histogram-bar')
             .data(bins)
             .enter()
             .append('rect')
             .attr('class', 'histogram-bar')
             .attr('x', d => xScale(d.min))
-            .attr('y', d => yScale(d.values.length))
-            .attr('width', d => Math.max(0, xScale(d.max) - xScale(d.min) - 1))
-            .attr('height', d => Math.max(0, yScale(0) - yScale(d.values.length)))
+            .attr('y', d => {
+                if (d.values.length === 0) return chartBottom;
+                const mappedY = logY ? Math.log10(d.values.length) : d.values.length;
+                return yScale(mappedY);
+            })
+            .attr('width', d => Math.max(0, xScale(d.max) - xScale(d.min) - 1)) 
+            .attr('height', d => {
+                if (d.values.length === 0) return 0;
+                const mappedY = logY ? Math.log10(d.values.length) : d.values.length;
+                return Math.max(0, chartBottom - yScale(mappedY));
+            })
             .attr('fill', this.color)
             .attr('opacity', this.opacity)
             .attr('stroke', '#fff')
             .attr('stroke-width', 1)
-            .append('title')
-            .text(d => `${d.min.toFixed(2)} - ${d.max.toFixed(2)}: ${d.values.length} values`);
+   
     }
 
     /**
@@ -149,13 +181,22 @@ export class HistogramRenderer extends BaseChartRenderer {
      * @param {d3.Scale} xScale - X-axis scale
      * @param {d3.Scale} yScale - Y-axis scale
      */
-    renderOutlierBin(g, outlierBin, normalBins, xScale, yScale) {
+    renderOutlierBin(g, outlierBin, normalBins, xScale, yScale, logY = false) { 
+        const yRange = yScale.range();
+        const chartBottom = Math.max(...yRange);
+        
         const lastBin = normalBins[normalBins.length - 1];
         const binWidth = xScale(lastBin.max) - xScale(lastBin.min);
         const outlierX = xScale(lastBin.max);
-        const outlierY = yScale(outlierBin.values.length);
-        const outlierHeight = Math.max(0, yScale(0) - outlierY);
-
+        
+        let outlierY = chartBottom;
+        let outlierHeight = 0;
+        
+        if (outlierBin.values.length > 0) {
+            const mappedY = logY ? Math.log10(outlierBin.values.length) : outlierBin.values.length;
+            outlierY = yScale(mappedY);
+            outlierHeight = Math.max(0, chartBottom - outlierY);
+        }
         // Draw outlier bar (half width, different color)
         g.append('rect')
             .attr('class', 'histogram-outlier-bar')
@@ -167,19 +208,18 @@ export class HistogramRenderer extends BaseChartRenderer {
             .attr('opacity', this.opacity)
             .attr('stroke', '#fff')
             .attr('stroke-width', 1)
-            .append('title')
-            .text(`Outliers (>${lastBin.max.toFixed(2)}): ${outlierBin.values.length} values`);
+       
 
-        // Add "Outliers" label
-        g.append('text')
-            .attr('class', 'histogram-outlier-label')
-            .attr('x', outlierX + binWidth / 4)
-            .attr('y', yScale(0) + 15)
-            .attr('text-anchor', 'middle')
-            .style('font-size', '12px')
-            .style('font-family', 'sans-serif')
-            .style('fill', this.outlierColor)
-            .text('Outliers');
+        // Add "Outliers" label (Deprecated)
+        // g.append('text')
+        //     .attr('class', 'histogram-outlier-label')
+        //     .attr('x', outlierX + binWidth / 4)
+        //     .attr('y', yScale(0) + 15)
+        //     .attr('text-anchor', 'middle')
+        //     .style('font-size', '12px')
+        //     .style('font-family', 'sans-serif')
+        //     .style('fill', this.outlierColor)
+        //     .text('Outliers');
     }
 
     /**
@@ -204,5 +244,97 @@ export class HistogramRenderer extends BaseChartRenderer {
      */
     setOutlierColor(color) {
         this.outlierColor = color;
+    }
+
+    /**
+     * Render a small stats table below the histogram plot area.
+     * @param {d3.Selection} g - D3 group selection (same coordinate space as chart)
+     * @param {d3.Scale} yScale - Y-axis scale (used to locate the bottom of the plot)
+     * @param {number} binWidth - Width of each bin (in data units)
+     * @param {number} outlierCount - Number of outlier data points
+     */
+    renderStatsTable(g, yScale, binWidth, outlierCount, logY = false) {
+        // Read the visual bottom of the chart natively from the scale's range
+        // rather than passing an extreme log dummy value which bloats CanvasSizer bounds
+        const yRange = yScale.range();
+        const chartBottom = Math.max(...yRange);
+        
+        const tableY = chartBottom + 36;
+        const tableX = 0;
+        const rowH = 22;
+        const colW = 180;
+        const padX = 10;
+        const padY = 5;
+
+        const rows = [
+            { label: 'Bin Width', value: binWidth > 0 ? Number(binWidth.toPrecision(4)).toString() : 'N/A' },
+            { label: 'Outliers', value: outlierCount.toString() },
+        ];
+
+        const tableWidth = colW * 2;
+        const tableHeight = rowH * rows.length + rowH; // header + rows
+
+        const tableGroup = g.append('g')
+            .attr('class', 'histogram-stats-table')
+            .attr('transform', `translate(${tableX},${tableY})`);
+
+        // Table background
+        tableGroup.append('rect')
+            .attr('x', 0).attr('y', 0)
+            .attr('width', tableWidth).attr('height', tableHeight)
+            .attr('fill', '#f8fafc')
+            .attr('stroke', '#e2e8f0')
+            .attr('stroke-width', 1)
+            .attr('rx', 6);
+
+        // Header row background
+        tableGroup.append('rect')
+            .attr('x', 0).attr('y', 0)
+            .attr('width', tableWidth).attr('height', rowH)
+            .attr('fill', '#e2e8f0')
+            .attr('rx', 6);
+        // Square off bottom corners of header
+        tableGroup.append('rect')
+            .attr('x', 0).attr('y', rowH / 2)
+            .attr('width', tableWidth).attr('height', rowH / 2)
+            .attr('fill', '#e2e8f0');
+
+        // Header text
+        tableGroup.append('text')
+            .attr('x', padX).attr('y', rowH - padY)
+            .style('font-size', '11px').style('font-weight', '600')
+            .style('font-family', 'Inter, sans-serif').style('fill', '#475569')
+            .text('Histogram Table');
+
+        // Divider between columns in header
+        tableGroup.append('line')
+            .attr('x1', colW).attr('y1', 0).attr('x2', colW).attr('y2', tableHeight)
+            .attr('stroke', '#e2e8f0').attr('stroke-width', 1);
+
+        // Data rows
+        rows.forEach((row, i) => {
+            const rowY = rowH + i * rowH;
+
+            // Row divider
+            if (i > 0) {
+                tableGroup.append('line')
+                    .attr('x1', 0).attr('y1', rowY).attr('x2', tableWidth).attr('y2', rowY)
+                    .attr('stroke', '#e2e8f0').attr('stroke-width', 1);
+            }
+
+            // Label cell
+            tableGroup.append('text')
+                .attr('x', padX).attr('y', rowY + rowH - padY)
+                .style('font-size', '11px').style('font-family', 'Inter, sans-serif')
+                .style('fill', '#64748b')
+                .text(row.label);
+
+            // Value cell
+            tableGroup.append('text')
+                .attr('x', colW + padX).attr('y', rowY + rowH - padY)
+                .style('font-size', '11px').style('font-family', 'Inter, sans-serif')
+                .style('fill', '#1e293b').style('font-weight', '500')
+                .text(row.value);
+        });
     }
 }
