@@ -14,6 +14,10 @@
     ],
     "author": "Siimpl",
     "license": "ISC",
+    "publishConfig": {
+        "registry": "https://npm.pkg.github.com",
+        "access": "restricted"
+    },
     "dependencies": {
         "@napi-rs/canvas": "^0.1.97",
         "@tauri-apps/plugin-dialog": "^2.0.0",
