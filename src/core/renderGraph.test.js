@@ -229,6 +229,52 @@ describe('renderGraph integration tests', () => {
         expect(shapePaths.size).toBeGreaterThan(1);
     });
 
+    it('Scatter multi-file same-column series: each series renders only its own file rows', () => {
+        const sampleData = [
+            { x: 1, value: 10, _sourceFile: 'a.csv' },
+            { x: 2, value: 20, _sourceFile: 'a.csv' },
+            { x: 1, value: 10, _sourceFile: 'b.csv' },
+            { x: 2, value: 20, _sourceFile: 'b.csv' }
+        ];
+
+        const config = {
+            graphType: 'scatter',
+            xAxis: 'x',
+            series: [
+                { yAxis: 'value::a.csv', type: 'scatter', color: 'red', strokeWidth: 2 },
+                { yAxis: 'value::b.csv', type: 'scatter', color: 'blue', strokeWidth: 6 }
+            ]
+        };
+
+        const result = renderGraph({
+            svg,
+            csvData: sampleData,
+            graphConfig: config,
+            globalSettings: defaultGlobalSettings,
+            colorSchemes: defaultColors
+        });
+
+        expect(result.success).toBe(true);
+
+        const group0Dots = Array.from(svg.querySelectorAll('.series-group-0 path.dot'));
+        const group1Dots = Array.from(svg.querySelectorAll('.series-group-1 path.dot'));
+
+        expect(group0Dots.length).toBe(2);
+        expect(group1Dots.length).toBe(2);
+
+        const group0Fills = new Set(group0Dots.map(dot => dot.style.fill));
+        const group1Fills = new Set(group1Dots.map(dot => dot.style.fill));
+        expect(group0Fills.size).toBe(1);
+        expect(group1Fills.size).toBe(1);
+        expect([...group0Fills][0]).not.toBe([...group1Fills][0]);
+
+        const group0Shapes = new Set(group0Dots.map(dot => dot.getAttribute('d')));
+        const group1Shapes = new Set(group1Dots.map(dot => dot.getAttribute('d')));
+        expect(group0Shapes.size).toBe(1);
+        expect(group1Shapes.size).toBe(1);
+        expect([...group0Shapes][0]).not.toBe([...group1Shapes][0]);
+    });
+
     it('Join X-axis: verify unified axis behaves correctly', () => {
         const config = {
             graphType: 'scatter',

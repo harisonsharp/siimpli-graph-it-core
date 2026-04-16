@@ -74,7 +74,9 @@ function calculateDimensions(settings, columnInfo, graphConfig) {
 
     rightMargin = Math.max(120, Math.min(450, rightMargin));
 
-    const topMargin = graphConfig.projectName ? 110 : 80;
+    const hasProjectName = Boolean(graphConfig.projectName && String(graphConfig.projectName).trim());
+    const hasSubtitle = Boolean(graphConfig.subtitle && String(graphConfig.subtitle).trim());
+    const topMargin = hasProjectName && hasSubtitle ? 130 : (hasProjectName || hasSubtitle ? 110 : 80);
 
     const margin = { top: topMargin, right: rightMargin, bottom: 100, left: 100 };
 
@@ -142,40 +144,54 @@ function renderTitle(svg, config, columnInfo, settings, dimensions) {
         seriesInfo.map(s => s.yAxisInfo),
         xAxisInfo
     );
-    if (config.projectName) {
-        svg.append("text")
-            .attr("x", dimensions.margin.left + dimensions.width / 2)
-            .attr("y", 30)
-            .attr("text-anchor", "middle")
-            .attr("class", "project-name")
-            .style("font-family", "sans-serif")
-            .style("font-size", "28px")
-            .style("font-weight", "bold")
-            .style("fill", "#333")
-            .text(config.projectName);
+    renderProjectName(svg, config, dimensions, title);
+}
 
-        svg.append("text")
-            .attr("x", dimensions.margin.left + dimensions.width / 2)
-            .attr("y", 55)
-            .attr("text-anchor", "middle")
-            .attr("class", "graph-title")
-            .style("font-family", "sans-serif")
-            .style("font-size", "20px")
-            .style("font-weight", "normal")
-            .style("fill", "#444")
-            .text(title);
-    } else {
-        svg.append("text")
-            .attr("x", dimensions.margin.left + dimensions.width / 2)
-            .attr("y", 30)
-            .attr("text-anchor", "middle")
-            .attr("class", "graph-title")
-            .style("font-family", "sans-serif")
-            .style("font-size", "20px")
-            .style("font-weight", "bold")
-            .style("fill", "#333")
-            .text(title);
+function renderProjectName(svg, config, dimensions, title) {
+    const centerX = dimensions.margin.left + dimensions.width / 2;
+    const projectName = (config.projectName || '').trim();
+    const subtitle = (config.subtitle || '').trim();
+    const hasProjectName = projectName.length > 0;
+    const hasSubtitle = subtitle.length > 0;
+
+    if (hasProjectName) {
+        svg.append('text')
+            .attr('x', centerX)
+            .attr('y', 30)
+            .attr('text-anchor', 'middle')
+            .attr('class', 'project-name')
+            .style('font-family', 'sans-serif')
+            .style('font-size', '28px')
+            .style('font-weight', 'bold')
+            .style('fill', '#333')
+            .text(projectName);
     }
+
+    if (hasSubtitle) {
+        svg.append('text')
+            .attr('x', centerX)
+            .attr('y', hasProjectName ? 55 : 30)
+            .attr('text-anchor', 'middle')
+            .attr('class', 'graph-subtitle')
+            .style('font-family', 'sans-serif')
+            .style('font-size', '16px')
+            .style('font-weight', 'normal')
+            .style('fill', '#555')
+            .text(subtitle);
+    }
+
+    const titleY = hasProjectName ? (hasSubtitle ? 78 : 55) : (hasSubtitle ? 55 : 30);
+
+    svg.append('text')
+        .attr('x', centerX)
+        .attr('y', titleY)
+        .attr('text-anchor', 'middle')
+        .attr('class', 'graph-title')
+        .style('font-family', 'sans-serif')
+        .style('font-size', '20px')
+        .style('font-weight', hasProjectName || hasSubtitle ? 'normal' : 'bold')
+        .style('fill', hasProjectName || hasSubtitle ? '#444' : '#333')
+        .text(title);
 }
 
 /**
@@ -475,8 +491,8 @@ export function renderGraph({
             const { width } = dimensions;
             svg.append('image')
                 .attr('href', logoDataUri)
-                .attr('x', dimensions.margin.left / 2)
-                .attr('y', dimensions.height + dimensions.margin.top + 20)
+                .attr('x', dimensions.margin.left / 2 - 20)
+                .attr('y', dimensions.height + dimensions.margin.top - 50)
                 .attr('width', 60)
                 .attr('height', 60);
         }

@@ -64,12 +64,9 @@ export class BaseChartRenderer {
      */
     filterValidData(data, xAxisInfo, yAxisInfo) {
         return data.filter(d => {
-            // File matching: Only exclude when files differ AND column doesn't exist in row
-            const hasFileContext = yAxisInfo.fileName && d._sourceFile;
-            const isSameFile = !hasFileContext || d._sourceFile === yAxisInfo.fileName;
-            const columnExistsInRow = d.hasOwnProperty(yAxisInfo.columnName);
-
-            if (hasFileContext && !isSameFile && !columnExistsInRow) {
+            // File-qualified series should only consume rows from the matching source file.
+            // Keep rows without _sourceFile for backward compatibility with older datasets.
+            if (yAxisInfo.fileName && d._sourceFile && d._sourceFile !== yAxisInfo.fileName) {
                 return false;
             }
 

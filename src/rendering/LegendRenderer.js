@@ -14,6 +14,7 @@
  *
  * @exports LegendRenderer
  */
+/** biome-ignore-all lint/complexity/noStaticOnlyClass: <explanation> */
 import * as d3 from 'd3';
 import { ScaleFactory } from './ScaleFactory.js';
 import { SymbolFactory } from '../utils/SymbolFactory.js';
@@ -283,6 +284,7 @@ export class LegendRenderer {
      */
 
     static drawSeriesLegend(graphConfig, svg, validData, seriesInfo, colorScale, graphDimensions, margin, xOffset = 90) {
+        // if (graphConfig.series.filter()
         const legend = svg.append("g")
             .attr("transform", `translate(${margin.left}, ${margin.top + graphDimensions.height - margin.bottom / 2})`);
         // .attr("transform", `translate(${graphDimensions.width - margin.right + xOffset}, ${margin.top})`);
@@ -295,7 +297,13 @@ export class LegendRenderer {
         if (graphConfig.barMode === 'stack-proportional' && seriesInfo.length > 1 && seriesInfo.some(s => s.graphType !== 'bar')) {
             stackProportionalLegend = true;
         }
-        seriesInfo.forEach((series, i) => {
+        seriesInfo.forEach((series, _i) => {
+            if (series.color==='white'){
+                return;
+            }
+            if(seriesInfo.filter(s => s.color!=='white').length <= 1){
+                return;
+            }
             debugLog('[LegendRenderer.drawSeriesLegend] validData, series.filterColumn', validData, series.filterColumn);
             let uniqueValues = [];
             if (SymbolFactory.shouldUseUniqueSymbolEncoding(series)) {
@@ -338,16 +346,16 @@ export class LegendRenderer {
             subItems.forEach((item) => {
                 // Calculate wrapping for THIS specific item
                 const labelArrTmp = item.label.split(/[\s_]/g);
-                let labelArr = [];
+                const labelArr = [];
                 let line = '';
                 for (let k = 0; k < labelArrTmp.length; k++) {
                     if (line.length + labelArrTmp[k].length > maxCharactersPerLine) {
-                        labelArr.push(line);
+                        labelArr.push(line.trimEnd());
                         line = '';
                     }
                     line += labelArrTmp[k] + ' ';
                 }
-                labelArr.push(line.trim());
+                if (line.trim().length > 0) labelArr.push(line.trimEnd());
 
                 // Calculate height for this item
                 // 1 line = roughly 20px space needed? Original logic was numLines * 30.

@@ -1,5 +1,5 @@
-import React, { createContext, useContext, useState } from 'react';
-import { DEFAULT_GRAPH_CONFIG, DEFAULT_CURVE_FIT, DEFAULT_SERIES_CONFIG } from '../constants.js';
+import { createContext, useCallback, useContext, useMemo, useState } from 'react';
+import { DEFAULT_GRAPH_CONFIG, DEFAULT_CURVE_FIT, DEFAULT_SERIES_CONFIG, DEFAULT_BOUND } from '../constants.js';
 /**
  * @fileoverview React Context provider for centralized application state management and configuration.
  * Manages graph settings, curve fit parameters, and global application state with validation and persistence.
@@ -42,6 +42,9 @@ export const ConfigProvider = ({ children }) => {
     const [curveFits, setCurveFits] = useState([
         { ...DEFAULT_CURVE_FIT, color: '#ff6b6b' }
     ]);
+    // const [bounds, setBounds] = useState([
+    //     { ...DEFAULT_BOUND, color: '#ff6b6b' }
+    // ]);
     const [globalSettings, setGlobalSettings] = useState({
         colorScheme: 'green-red',
         axisIntercept: 'origin',
@@ -54,36 +57,36 @@ export const ConfigProvider = ({ children }) => {
     });
 
 
-    const updateGraphConfig = (updates) => {
+    const updateGraphConfig = useCallback((updates) => {
         if (!updates || typeof updates !== 'object') {
             debugWarn('Invalid updates provided to updateGraphConfig');
             return;
         }
         setGraphConfig(prev => ({ ...prev, ...updates }));
-    };
+    }, []);
 
-    const addSeries = () => {
+    const addSeries = useCallback(() => {
         setGraphConfig(prev => ({
             ...prev,
             series: [...prev.series, { ...DEFAULT_SERIES_CONFIG }]
         }));
-    };
+    }, []);
 
-    const removeSeries = (index) => {
+    const removeSeries = useCallback((index) => {
         setGraphConfig(prev => ({
             ...prev,
             series: prev.series.filter((_, i) => i !== index)
         }));
-    };
+    }, []);
 
-    const updateSeries = (index, updates) => {
+    const updateSeries = useCallback((index, updates) => {
         setGraphConfig(prev => ({
             ...prev,
             series: prev.series.map((s, i) => i === index ? { ...s, ...updates } : s)
         }));
-    };
+    }, []);
 
-    const moveSeries = (fromIndex, toIndex) => {
+    const moveSeries = useCallback((fromIndex, toIndex) => {
         if (fromIndex === toIndex) return;
         setGraphConfig(prev => {
             const newSeries = [...prev.series];
@@ -94,33 +97,38 @@ export const ConfigProvider = ({ children }) => {
                 series: newSeries
             };
         });
-    };
+    }, []);
 
-    const updateCurveFit = (index, field, value) => {
-        if (typeof index !== 'number' || index < 0 || index >= curveFits.length) {
-            debugWarn('Invalid index provided to updateCurveFit');
-            return;
-        }
-        if (!field || typeof field !== 'string') {
-            debugWarn('Invalid field provided to updateCurveFit');
-            return;
-        }
-        setCurveFits(prev => prev.map((fit, i) =>
-            i === index ? { ...fit, [field]: value } : fit
-        ));
-    };
+    const updateCurveFit = useCallback((index, field, value) => {
+        setCurveFits(prev => {
+            if (typeof index !== 'number' || index < 0 || index >= prev.length) {
+                debugWarn('Invalid index provided to updateCurveFit');
+                return prev;
+            }
+            if (!field || typeof field !== 'string') {
+                debugWarn('Invalid field provided to updateCurveFit');
+                return prev;
+            }
+            return prev.map((fit, i) => i === index ? { ...fit, [field]: value } : fit);
+        });
+    }, []);
 
-    const addCurveFit = () => {
+    // const updateBound = useCallback((index, field, value) => {
+    //     setBounds(prev)
+    // }, []);
+    const addCurveFit = useCallback(() => {
         const colors = ['#ff6b6b', '#4ecdc4', '#45b7d1', '#96ceb4', '#ffeaa7', '#dda0dd'];
-        const newColor = colors[curveFits.length % colors.length];
-        setCurveFits(prev => [...prev, { ...DEFAULT_CURVE_FIT, color: newColor }]);
-    };
+        setCurveFits(prev => {
+            const newColor = colors[prev.length % colors.length];
+            return [...prev, { ...DEFAULT_CURVE_FIT, color: newColor }];
+        });
+    }, []);
 
-    const removeCurveFit = () => {
+    const removeCurveFit = useCallback(() => {
         setCurveFits(prev => prev.slice(0, -1));
-    };
+    }, []);
 
-    const updateGlobalSettings = (updates) => {
+    const updateGlobalSettings = useCallback((updates) => {
         if (!updates || typeof updates !== 'object') {
             debugWarn('Invalid updates provided to updateGlobalSettings');
             return;
@@ -131,9 +139,9 @@ export const ConfigProvider = ({ children }) => {
             debugLog('[ConfigContext] setGlobalSettings -> next:', next, 'from:', prev, 'stack:', stack);
             return next;
         });
-    };
+    }, []);
 
-    const resetConfig = () => {
+    const resetConfig = useCallback(() => {
         setGraphConfig(DEFAULT_GRAPH_CONFIG);
         setCurveFits([
             { ...DEFAULT_CURVE_FIT, color: '#ff6b6b' }
@@ -148,9 +156,9 @@ export const ConfigProvider = ({ children }) => {
             showStaticTable: false,
             selectedXValue: null
         });
-    };
+    }, []);
 
-    const contextValue = {
+    const contextValue = useMemo(() => ({
         graphConfig,
         curveFits,
         globalSettings,
@@ -164,7 +172,11 @@ export const ConfigProvider = ({ children }) => {
         removeCurveFit,
         updateGlobalSettings,
         resetConfig
-    };
+    }), [graphConfig, curveFits, globalSettings,
+        updateGraphConfig, addSeries, removeSeries,
+        updateSeries, moveSeries, updateCurveFit,
+        addCurveFit, removeCurveFit, updateGlobalSettings, resetConfig
+    ]);
 
     return (
         <ConfigContext.Provider value={contextValue}>

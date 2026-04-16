@@ -241,8 +241,8 @@ function drawLogoToCanvas(ctx, logoImage, width, height, margin, scale = 1) {
             const logoTargetWidth = 60 * scale;
             const aspectRatio = logoImage.naturalHeight / logoImage.naturalWidth;
             const logoHeight = logoTargetWidth * aspectRatio;
-            const logoX = usedMargin.left - logoTargetWidth - 10;
-            const logoY = usedMargin.top + graphHeight + 10;
+            const logoX = usedMargin.left - logoTargetWidth - 20;
+            const logoY = usedMargin.top + graphHeight + 30;
 
             ctx.save();
             ctx.globalAlpha = 0.8;

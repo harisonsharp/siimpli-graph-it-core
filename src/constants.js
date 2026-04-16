@@ -14,7 +14,7 @@
  * @exports COLOR_SCHEMES - Available color palettes for data visualization
  * @exports DEFAULT_GRAPH_CONFIG - Default settings for new graphs
  * @exports DEFAULT_CURVE_FIT - Default parameters for curve fitting operations
- *
+ * @exports DEFAULT_BOUND - Default parameters for bound lines for curve fit limits
  * @example
  * import { GRAPH_CONFIG, DEFAULT_CURVE_FIT } from './constants.js';
  * const margins = GRAPH_CONFIG.MARGINS;
@@ -78,6 +78,7 @@ export const DEFAULT_GRAPH_CONFIG = {
     graphType: 'scatter', // Kept for backwards compatibility, but series-specific type is preferred
     barMode: 'group', // 'group' or 'stack'
     title: '',
+    subtitle: '',
     dualUnits: false,
     scaleFactor: 1,
     fromUnits: '',
@@ -104,9 +105,21 @@ export const DEFAULT_CURVE_FIT = {
     xMax: '',
     fitType: 'best_fit',
     order: 2,
+    strokeWidth: 2,
+    lineStyle: 'solid',
     customEquation: '',
     confidenceBands: { enabled: false, bands: [] },
-    result: null
+    result: null,
+    bounds: []
 };
 
-
+export const DEFAULT_BOUND = {
+    value: 0,
+    color: '#ff6b6b',
+    x: 0,
+    y: 0,
+    height: 0,
+    fontSize: 12,
+    strokeWidth: 1,
+    lineStyle: 'solid'
+}

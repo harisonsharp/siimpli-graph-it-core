@@ -278,42 +278,71 @@ export const fitCustomEquation = (data, equationStr) => {
  * Compute asymmetric residual standard deviations from a set of data points
  * and a predictor function, returning separate upper/lower std values.
  *
- * Upper std = std of positive residuals (actual > predicted)
- * Lower std = std of negative residuals (actual < predicted)
+ * Residuals of exactly zero are excluded from both halves (they carry no
+ * directional information).  Each half uses RMS from zero (not mean-centred),
+ * so the result measures the typical distance a point sits from the fit line —
+ * the correct denominator for a band intended to contain ~68% of points.
+ *
+ * Upper std = RMS of positive residuals (actual > predicted)
+ * Lower std = RMS of negative residuals (actual < predicted)
+ *
+ * When all data and predictions are strictly positive, log₁₀-space residuals
+ * are used (multiplicative / scale-invariant); otherwise linear residuals.
  *
  * @param {Array<{x:number,y:number}>} data
  * @param {Function} predictor  (x) => yHat
- * @returns {{ upperStd: number, lowerStd: number, n: number }}
+ * @param {boolean}  isLogY     force log-space residuals even if not all-positive
+ * @returns {{ upperStd: number, lowerStd: number, n: number, usedLog: boolean }}
  */
 export const computeAsymmetricResidualStd = (data, predictor, isLogY = false) => {
+    // Determine whether all data and predictions are positive so we can use
+    // multiplicative (log-space) residuals.  Multiplicative residuals are
+    // invariant to the choice of linear vs. log display axis, and are the
+    // only meaningful measure when data spans multiple orders of magnitude.
+    // If any value is non-positive we fall back to linear absolute residuals.
+    const allPositive = data.every(p => {
+        if (!Number.isFinite(p.y) || p.y <= 0) return false;
+        const yHat = predictor(p.x);
+        return Number.isFinite(yHat) && yHat > 0;
+    });
+
+    const useLog = isLogY || allPositive;
+
     const posRes = [], negRes = [];
     for (const p of data) {
         const yHat = predictor(p.x);
         if (!Number.isFinite(yHat)) continue;
-        if (isLogY && (p.y <= 0 || yHat <= 0)) continue;
-        
+        if (useLog && (p.y <= 0 || yHat <= 0)) continue;
+
         let r;
-        if (isLogY) {
+        if (useLog) {
             r = Math.log10(p.y) - Math.log10(yHat);
         } else {
             r = p.y - yHat;
         }
-        
-        if (r >= 0) posRes.push(r);
-        else negRes.push(r);
+
+        // Exclude exact zeros: they carry no directional information and would
+        // inflate the positive-half count without contributing signal.
+        if (r > 0) posRes.push(r);
+        else if (r < 0) negRes.push(r);
     }
 
+    // RMS from zero: the band width should reflect the typical distance a point
+    // sits from the fit line, not the variance around the within-half mean.
+    // Mean-centring within the positive (or negative) half removes the mean
+    // offset and makes the band too narrow — 51% coverage instead of ~68%.
+    // sqrt(Σr²/n) correctly measures the RMS distance from the fit line.
     const stdOf = (arr) => {
         if (arr.length === 0) return 0;
-        const mean = arr.reduce((s, v) => s + v, 0) / arr.length;
-        const variance = arr.reduce((s, v) => s + (v - mean) ** 2, 0) / arr.length;
-        return Math.sqrt(variance);
+        const sumSq = arr.reduce((s, v) => s + v * v, 0);
+        return Math.sqrt(sumSq / arr.length);
     };
 
     return {
         upperStd: stdOf(posRes),
-        lowerStd: stdOf(negRes.map(Math.abs)),
-        n: posRes.length + negRes.length
+        lowerStd: stdOf(negRes),
+        n: posRes.length + negRes.length,
+        usedLog: useLog
     };
 };
 
@@ -321,26 +350,42 @@ export const computeAsymmetricResidualStd = (data, predictor, isLogY = false) =>
  * Build a local-std function by binning raw residuals into x-quantile bins and
  * then smoothing the per-bin std values with a Gaussian kernel.
  *
- * Each curve point gets its own upper/lower std estimate interpolated from the
- * smoothed bin values, so the band width reflects the actual spread of data in
- * that region rather than a single global constant.
+ * Two independent parameters shape the output:
  *
- * Smoothing prevents the jagged steps that would appear if raw bin boundaries
- * were used directly.
+ *  adaptiveBandwidth (0–1):
+ *    When > 0 the Gaussian kernel bandwidth at each query point is set adaptively
+ *    to the distance to the k-th nearest bin centre (k = max(1, round(f * nBins))).
+ *    This makes the window tight where bins are dense and wide where they are
+ *    sparse, so transient variance spikes are reflected locally rather than being
+ *    averaged away.  When = 0 the fixed global bandwidth (one bin-spacing wide)
+ *    is used instead.
+ *
+ *  smoothing (0–1):
+ *    Post-smoothing Gaussian blur applied after the per-query std is estimated.
+ *    bandwidth = binSpacing + smoothing * (xRange − binSpacing).
+ *    Low values preserve bin-level detail; high values blend toward a global average.
+ *    Default 0 (no post-smoothing beyond the minimum one-bin-spacing kernel).
  *
  * @param {Array<{x:number,y:number}>} data
- * @param {Function} predictor  (x) => yHat
- * @param {number}   nBins      number of quantile bins (default 8)
+ * @param {Function} predictor          (x) => yHat
+ * @param {number}   nBins              number of quantile bins (default 8)
+ * @param {boolean}  isLogY
+ * @param {number}   smoothing          post-smooth kernel bandwidth as fraction of x-range (0–1, default 0)
+ * @param {number}   adaptiveBandwidth  k-NN fraction for adaptive per-query bandwidth (0–1, default 0)
  * @returns {{ upperStdAt: (x:number)=>number, lowerStdAt: (x:number)=>number }}
  */
-const buildLocalStdFunctions = (data, predictor, nBins = 8, isLogY = false) => {
+const buildLocalStdFunctions = (data, predictor, nBins = 8, isLogY = false, smoothing = 0, adaptiveBandwidth = 0) => {
     const valid = data
         .filter(p => Number.isFinite(p.x) && Number.isFinite(p.y) && Number.isFinite(predictor(p.x)))
         .sort((a, b) => a.x - b.x);
 
+    // Use multiplicative residuals whenever all data is positive (same logic as computeAsymmetricResidualStd).
+    const allPositive = valid.every(p => p.y > 0 && predictor(p.x) > 0);
+    const effectiveIsLogY = isLogY || allPositive;
+
     if (valid.length < 4) {
         // Fall back to global std when there is too little data to bin
-        const { upperStd, lowerStd } = computeAsymmetricResidualStd(valid, predictor, isLogY);
+        const { upperStd, lowerStd } = computeAsymmetricResidualStd(valid, predictor, effectiveIsLogY);
         return { upperStdAt: () => upperStd, lowerStdAt: () => lowerStd };
     }
 
@@ -352,22 +397,33 @@ const buildLocalStdFunctions = (data, predictor, nBins = 8, isLogY = false) => {
     for (let b = 0; b < actualBins; b++) {
         const slice = valid.slice(b * binSize, (b + 1) * binSize);
         if (slice.length === 0) continue;
-        const { upperStd, lowerStd } = computeAsymmetricResidualStd(slice, predictor, isLogY);
+        const { upperStd, lowerStd } = computeAsymmetricResidualStd(slice, predictor, effectiveIsLogY);
         const cx = slice.reduce((s, p) => s + p.x, 0) / slice.length;
         centres.push(cx);
         upperStds.push(upperStd);
         lowerStds.push(lowerStd);
     }
 
-    // Gaussian kernel smoother: for query x, weighted average of bin values
-    // Bandwidth = half the total x-range, so all bins contribute meaningfully
     const xMin = centres[0], xMax = centres[centres.length - 1];
-    const bandwidth = Math.max((xMax - xMin) * 0.5, 1e-10);
+    const xRange = xMax - xMin;
+    const binSpacing = centres.length > 1 ? xRange / (centres.length - 1) : 1;
 
-    const gaussianSmooth = (stds, queryX) => {
+    // --- Pass 1: per-query Gaussian kernel over bin centres ---
+    // adaptiveBandwidth > 0: bandwidth = k-th nearest bin-centre distance (adapts to local density).
+    // adaptiveBandwidth = 0: bandwidth = one bin-spacing (sharp, each query mostly sees its nearest bin).
+    const clampedAB = Math.max(0, Math.min(1, adaptiveBandwidth));
+    const kNeighbours = Math.max(1, Math.round(clampedAB * centres.length));
+
+    const kthCentreDistance = (queryX) => {
+        const dists = centres.map(c => Math.abs(c - queryX)).sort((a, b) => a - b);
+        return Math.max(dists[kNeighbours - 1] ?? 1e-10, 1e-10);
+    };
+
+    const primaryEstimate = (stds, queryX) => {
+        const bw = clampedAB > 0 ? kthCentreDistance(queryX) : binSpacing;
         let wSum = 0, vSum = 0;
         for (let i = 0; i < centres.length; i++) {
-            const u = (queryX - centres[i]) / bandwidth;
+            const u = (queryX - centres[i]) / bw;
             const w = Math.exp(-0.5 * u * u);
             wSum += w;
             vSum += w * stds[i];
@@ -375,47 +431,258 @@ const buildLocalStdFunctions = (data, predictor, nBins = 8, isLogY = false) => {
         return wSum > 0 ? vSum / wSum : stds[0];
     };
 
+    // --- Pass 2: optional Gaussian post-smooth over a sampled grid ---
+    // smoothing=0 → skip (return pass-1 directly).
+    // smoothing=1 → blur across the full x-range, approaching a global average.
+    const clampedSmoothing = Math.max(0, Math.min(1, smoothing));
+    if (clampedSmoothing === 0) {
+        return {
+            upperStdAt: (x) => primaryEstimate(upperStds, x),
+            lowerStdAt: (x) => primaryEstimate(lowerStds, x),
+        };
+    }
+
+    const GRID_N = 200;
+    const gridStep = xRange / (GRID_N - 1);
+    const gridXs = Array.from({ length: GRID_N }, (_, i) => xMin + i * gridStep);
+    const gridUpper = gridXs.map(x => primaryEstimate(upperStds, x));
+    const gridLower = gridXs.map(x => primaryEstimate(lowerStds, x));
+    const smoothBw = Math.max(clampedSmoothing * xRange, gridStep);
+
+    const gaussianBlend = (grid, queryX) => {
+        let wSum = 0, vSum = 0;
+        for (let i = 0; i < GRID_N; i++) {
+            const u = (queryX - gridXs[i]) / smoothBw;
+            const w = Math.exp(-0.5 * u * u);
+            wSum += w;
+            vSum += w * grid[i];
+        }
+        return wSum > 0 ? vSum / wSum : grid[0];
+    };
+
     return {
-        upperStdAt: (x) => gaussianSmooth(upperStds, x),
-        lowerStdAt: (x) => gaussianSmooth(lowerStds, x),
+        upperStdAt: (x) => gaussianBlend(gridUpper, x),
+        lowerStdAt: (x) => gaussianBlend(gridLower, x),
+    };
+};
+
+/**
+ * Build upper/lower weighted-std functions using a LOWESS-style tricube kernel.
+ *
+ * For each query x the adaptive bandwidth d_max is the distance to the k-th
+ * nearest neighbour among ALL residual points (both signs).  Points are then
+ * weighted by the tricube kernel:
+ *
+ *   w(xⱼ, x) = (1 − (|xⱼ − x| / d_max)³)³   if |xⱼ − x| ≤ d_max, else 0
+ *
+ * Positive and negative residuals are accumulated separately using a shared
+ * window, giving an asymmetric band without independent bandwidths per side
+ * (which would produce jarring asymmetry in locally-biased regions).
+ *
+ * The per-side estimate is the weighted population standard deviation
+ * (mean-centred within that side's weighted distribution):
+ *
+ *   μ̂⁺(x) = Σ wⱼ·rⱼ / Σ wⱼ          (for rⱼ > 0)
+ *   σ⁺(x)  = sqrt( Σ wⱼ·(rⱼ − μ̂⁺)² / Σ wⱼ )
+ *
+ * This is the smoothest possible estimator — no bin boundaries, continuous
+ * output, and density-adaptive (tight windows where data is dense, wide where
+ * it is sparse).
+ *
+ * An optional `smoothing` (0–1) parameter applies a Gaussian post-smooth over a
+ * fixed grid of 200 sample points after the per-query tricube estimates are computed,
+ * with bandwidth = smoothing * xRange.  This lets the user trade responsiveness for
+ * continuity independently of the neighbourhood size.
+ *
+ * @param {Array<{x:number,y:number}>} data
+ * @param {Function} predictor          (x) => yHat
+ * @param {number}   neighbourFraction  fraction of ALL points used as neighbourhood (0–1, default 0.3)
+ * @param {boolean}  isLogY
+ * @param {number}   smoothing          post-smooth Gaussian bandwidth as fraction of x-range (0–1, default 0)
+ * @returns {{ upperStdAt: (x:number)=>number, lowerStdAt: (x:number)=>number }}
+ */
+const buildLowessStdFunctions = (data, predictor, neighbourFraction = 0.3, isLogY = false, smoothing = 0) => {
+    // Use multiplicative residuals whenever all data is positive (same logic as computeAsymmetricResidualStd).
+    const allPositive = data.every(p => {
+        if (!Number.isFinite(p.y) || p.y <= 0) return false;
+        const yHat = predictor(p.x);
+        return Number.isFinite(yHat) && yHat > 0;
+    });
+    const useLog = isLogY || allPositive;
+
+    // Collect all valid residuals into a single array, tagged by sign.
+    // The adaptive bandwidth (k-th neighbour distance) is derived from the full
+    // x-distribution — not split by sign — so the window is consistent across
+    // both sides.  Splitting upfront caused the upper and lower windows to diverge
+    // in regions where the fit is locally biased, producing jarring asymmetry that
+    // did not reflect true scatter.
+    const allPts = [];
+    for (const p of data) {
+        const yHat = predictor(p.x);
+        if (!Number.isFinite(p.x) || !Number.isFinite(p.y) || !Number.isFinite(yHat)) continue;
+        if (useLog && (p.y <= 0 || yHat <= 0)) continue;
+        const r = useLog ? Math.log10(p.y) - Math.log10(yHat) : p.y - yHat;
+        if (!Number.isFinite(r) || r === 0) continue;
+        allPts.push({ x: p.x, r });
+    }
+
+    const tricube = (u) => {
+        // Strict inequality: the k-th neighbour sits at u=1 exactly and should
+        // receive a small positive weight rather than being silently dropped.
+        if (u > 1) return 0;
+        const v = 1 - u * u * u;
+        return v * v * v;
+    };
+
+    if (allPts.length < 2) {
+        return { upperStdAt: () => 0, lowerStdAt: () => 0 };
+    }
+
+    // Unified bandwidth: k is sized relative to all points so the window
+    // encloses the same neighbourhood regardless of residual sign.
+    const k = Math.max(2, Math.round(neighbourFraction * allPts.length));
+    const sortedAllX = allPts.map(p => p.x).sort((a, b) => a - b);
+
+    const kthDistance = (queryX) => {
+        let lo = 0, hi = sortedAllX.length;
+        while (lo < hi) {
+            const mid = (lo + hi) >>> 1;
+            if (sortedAllX[mid] < queryX) lo = mid + 1; else hi = mid;
+        }
+        const dists = [];
+        let left = lo - 1, right = lo;
+        while (dists.length < k && (left >= 0 || right < sortedAllX.length)) {
+            const dL = left >= 0 ? Math.abs(sortedAllX[left] - queryX) : Infinity;
+            const dR = right < sortedAllX.length ? Math.abs(sortedAllX[right] - queryX) : Infinity;
+            if (dL <= dR) { dists.push(dL); left--; }
+            else { dists.push(dR); right++; }
+        }
+        return dists[dists.length - 1] ?? 1e-10;
+    };
+
+    // For each query x, compute the shared d_max once, then accumulate the
+    // weighted one-sided std separately for positive and negative residuals.
+    const makeStdAt = (sign) => (queryX) => {
+        const dMax = Math.max(kthDistance(queryX), 1e-10);
+        let wSum = 0, wrSum = 0;
+        for (const { x, r } of allPts) {
+            if (sign > 0 ? r <= 0 : r >= 0) continue;
+            const w = tricube(Math.abs(x - queryX) / dMax);
+            if (w <= 0) continue;
+            wSum += w;
+            wrSum += w * r * r;
+        }
+        if (wSum <= 0) return 0;
+        // Weighted RMS from zero: measures the typical distance a point sits from
+        // the fit line.  Subtracting the weighted mean (mean-centring within the
+        // half) would remove the mean offset and under-report the band width,
+        // producing too-narrow bands (~51% coverage instead of ~68%).
+        return Math.sqrt(wrSum / wSum);
+    };
+
+    const rawUpperStdAt = makeStdAt(+1);
+    const rawLowerStdAt = makeStdAt(-1);
+
+    // Optional Gaussian post-smooth over a sampled grid.
+    // When smoothing = 0 we skip entirely and return the raw tricube estimates.
+    const clampedSmoothing = Math.max(0, Math.min(1, smoothing));
+    if (clampedSmoothing === 0 || allPts.length < 2) {
+        return { upperStdAt: rawUpperStdAt, lowerStdAt: rawLowerStdAt };
+    }
+
+    // Pre-sample the raw estimates on a fixed grid, then answer each query
+    // via a Gaussian-weighted blend of those grid values.
+    const GRID_N = 200;
+    const xVals = allPts.map(p => p.x);
+    const xGridMin = Math.min(...xVals);
+    const xGridMax = Math.max(...xVals);
+    const xGridRange = xGridMax - xGridMin;
+    const gridStep = xGridRange / (GRID_N - 1);
+    const gridXs = Array.from({ length: GRID_N }, (_, i) => xGridMin + i * gridStep);
+    const gridUpper = gridXs.map(x => rawUpperStdAt(x));
+    const gridLower = gridXs.map(x => rawLowerStdAt(x));
+    const smoothBw = Math.max(clampedSmoothing * xGridRange, gridStep);
+
+    const gaussianBlend = (grid, queryX) => {
+        let wSum = 0, vSum = 0;
+        for (let i = 0; i < GRID_N; i++) {
+            const u = (queryX - gridXs[i]) / smoothBw;
+            const w = Math.exp(-0.5 * u * u);
+            wSum += w;
+            vSum += w * grid[i];
+        }
+        return wSum > 0 ? vSum / wSum : grid[0];
+    };
+
+    return {
+        upperStdAt: (x) => gaussianBlend(gridUpper, x),
+        lowerStdAt: (x) => gaussianBlend(gridLower, x),
     };
 };
 
 /**
  * Generate upper and lower confidence band curve points for a fitted curve.
  *
- * Three band modes:
- *  - 'stddev':       bands at ±N global standard deviations of residuals (asymmetric)
- *  - 'local_stddev': bands at ±N local standard deviations, varying along x (tapers with data)
- *  - 'expression':   bands defined by user-entered offset expressions referencing 'y'
+ * Band modes:
+ *  - 'stddev':        bands at ±N global standard deviations of residuals (asymmetric)
+ *  - 'local_stddev':  bands at ±N local standard deviations, binned + Gaussian-smoothed
+ *  - 'lowess_stddev': bands at ±N weighted std, LOWESS-style tricube kernel (smoothest)
+ *  - 'expression':    bands defined by user-entered offset expressions referencing 'y'
  *
  * @param {Array<{x:number,y:number}>} mainPoints  - already-generated main curve points
  * @param {Array<{x:number,y:number}>} rawData     - original scatter data for stddev modes
  * @param {Function} predictor                      - (x) => y for the main curve
  * @param {Object}   bandConfig
- * @param {string}   bandConfig.mode               - 'stddev' | 'local_stddev' | 'expression'
- * @param {number}   [bandConfig.nStdDev]          - number of std deviations (stddev modes)
- * @param {number}   [bandConfig.nBins]            - number of x-quantile bins (local_stddev mode, default 8)
- * @param {string}   [bandConfig.upperExpr]        - e.g. "y * 1.235"  (expression mode)
- * @param {string}   [bandConfig.lowerExpr]        - e.g. "y * 0.793"  (expression mode)
+ * @param {string}   bandConfig.mode                  - 'stddev' | 'local_stddev' | 'lowess_stddev' | 'expression'
+ * @param {number}   [bandConfig.nStdDev]             - number of std deviations (stddev modes)
+ * @param {number}   [bandConfig.nBins]               - number of x-quantile bins (local_stddev mode, default 8)
+ * @param {number}   [bandConfig.adaptiveBandwidth]   - k-NN neighbourhood fraction for adaptive window (local_stddev/lowess_stddev, 0–1, default 0)
+ * @param {number}   [bandConfig.smoothing]           - post-smooth Gaussian bandwidth fraction (local_stddev/lowess_stddev, 0–1, default 0)
+ * @param {string}   [bandConfig.upperExpr]           - e.g. "y * 1.235"  (expression mode)
+ * @param {string}   [bandConfig.lowerExpr]           - e.g. "y * 0.793"  (expression mode)
  * @returns {{ upperBandPoints: Array, lowerBandPoints: Array, upperStdPct: number|null, lowerStdPct: number|null }}
  */
 export const generateConfidenceBandPoints = (mainPoints, rawData, predictor, bandConfig, isLogY = false) => {
-    const { mode, nStdDev, nBins, upperExpr, lowerExpr } = bandConfig;
+    const { mode, nStdDev, nBins, adaptiveBandwidth, smoothing, upperExpr, lowerExpr } = bandConfig;
+
+    // Determine whether to use multiplicative (log-space) residuals.
+    // We do so whenever the display axis is log OR when all data is strictly positive —
+    // multiplicative residuals are invariant to linear/log display and avoid the
+    // constant-absolute-offset problem on data that spans orders of magnitude.
+    const allPositive = rawData.every(p => {
+        if (!Number.isFinite(p.y) || p.y <= 0) return false;
+        const yHat = predictor(p.x);
+        return Number.isFinite(yHat) && yHat > 0;
+    });
+    const useLog = isLogY || allPositive;
 
     let upperOffset, lowerOffset;
 
     if (mode === 'stddev') {
         const n = typeof nStdDev === 'number' && isFinite(nStdDev) ? nStdDev : 1;
-        const { upperStd, lowerStd } = computeAsymmetricResidualStd(rawData, predictor, isLogY);
-        upperOffset = (_x, y) => isLogY ? y * Math.pow(10, n * upperStd) : y + n * upperStd;
-        lowerOffset = (_x, y) => isLogY ? y * Math.pow(10, -n * lowerStd) : y - n * lowerStd;
+        // Pass the resolved useLog flag so the inner function uses the same residual
+        // space as the outer offset application — avoids a unit mismatch where σ is
+        // computed in log-space but applied as a linear offset (or vice-versa).
+        const { upperStd, lowerStd } = computeAsymmetricResidualStd(rawData, predictor, useLog);
+        upperOffset = (_x, y) => useLog ? y * Math.pow(10, n * upperStd) : y + n * upperStd;
+        lowerOffset = (_x, y) => useLog ? y * Math.pow(10, -n * lowerStd) : y - n * lowerStd;
     } else if (mode === 'local_stddev') {
-        const n = typeof nStdDev === 'number' && isFinite(nStdDev) ? nStdDev : 1;
+        const n = typeof nStdDev === 'number' && Number.isFinite(nStdDev) ? nStdDev : 1;
         const bins = typeof nBins === 'number' && nBins >= 2 ? Math.round(nBins) : 8;
-        const { upperStdAt, lowerStdAt } = buildLocalStdFunctions(rawData, predictor, bins, isLogY);
-        upperOffset = (x, y) => isLogY ? y * Math.pow(10, n * upperStdAt(x)) : y + n * upperStdAt(x);
-        lowerOffset = (x, y) => isLogY ? y * Math.pow(10, -n * lowerStdAt(x)) : y - n * lowerStdAt(x);
+        const sm = typeof smoothing === 'number' && Number.isFinite(smoothing) ? smoothing : 0;
+        const ab = typeof adaptiveBandwidth === 'number' && Number.isFinite(adaptiveBandwidth) ? adaptiveBandwidth : 0;
+        const { upperStdAt, lowerStdAt } = buildLocalStdFunctions(rawData, predictor, bins, useLog, sm, ab);
+        upperOffset = (x, y) => useLog ? y * Math.pow(10, n * upperStdAt(x)) : y + n * upperStdAt(x);
+        lowerOffset = (x, y) => useLog ? y * Math.pow(10, -n * lowerStdAt(x)) : y - n * lowerStdAt(x);
+    } else if (mode === 'lowess_stddev') {
+        const n = typeof nStdDev === 'number' && Number.isFinite(nStdDev) ? nStdDev : 1;
+        const neighbourFraction = typeof adaptiveBandwidth === 'number' && Number.isFinite(adaptiveBandwidth)
+            ? Math.max(0.05, Math.min(1, adaptiveBandwidth))
+            : 0.3;
+        const sm = typeof smoothing === 'number' && Number.isFinite(smoothing) ? smoothing : 0;
+        const { upperStdAt, lowerStdAt } = buildLowessStdFunctions(rawData, predictor, neighbourFraction, useLog, sm);
+        upperOffset = (x, y) => useLog ? y * Math.pow(10, n * upperStdAt(x)) : y + n * upperStdAt(x);
+        lowerOffset = (x, y) => useLog ? y * Math.pow(10, -n * lowerStdAt(x)) : y - n * lowerStdAt(x);
     } else if (mode === 'expression') {
         const upperFn = upperExpr ? compileEquation(upperExpr) : null;
         const lowerFn = lowerExpr ? compileEquation(lowerExpr) : null;
@@ -433,25 +700,102 @@ export const generateConfidenceBandPoints = (mainPoints, rawData, predictor, ban
         .map(p => { const v = lowerOffset(p.x, p.y); return Number.isFinite(v) ? { x: p.x, y: v } : null; })
         .filter(Boolean);
 
-    // Compute percentage std deviations relative to the mean y of main curve
-    // (for display in the result panel — mirrors the example: "Upper std = 23.5 %")
+    // Compute percentage deviations for display in the result panel.
+    // Each mode derives the stat from what it actually drew, not from a separate calculation.
+    // Helper: median of a numeric array (non-destructive).
+    const medianOf = (arr) => {
+        if (arr.length === 0) return NaN;
+        const sorted = arr.slice().sort((a, b) => a - b);
+        const mid = sorted.length >> 1;
+        return sorted.length % 2 === 0 ? (sorted[mid - 1] + sorted[mid]) / 2 : sorted[mid];
+    };
+
     let upperStdPct = null, lowerStdPct = null;
-    if ((mode === 'stddev' || mode === 'local_stddev') && rawData.length > 0) {
-        const { upperStd, lowerStd } = computeAsymmetricResidualStd(rawData, predictor, isLogY);
-        
-        if (isLogY) {
+    if (mode === 'stddev' && rawData.length > 0) {
+        const { upperStd, lowerStd } = computeAsymmetricResidualStd(rawData, predictor, useLog);
+        if (useLog) {
             upperStdPct = (Math.pow(10, upperStd) - 1) * 100;
             lowerStdPct = (1 - Math.pow(10, -lowerStd)) * 100;
         } else {
-            const meanYhat = mainPoints.reduce((s, p) => s + p.y, 0) / (mainPoints.length || 1);
-            if (Number.isFinite(meanYhat) && meanYhat !== 0) {
-                upperStdPct = (upperStd / meanYhat) * 100;
-                lowerStdPct = (lowerStd / meanYhat) * 100;
+            // Use the median fitted value as denominator: the mean is skewed by the
+            // extremes of a sloped curve and gives a misleading "average %" figure.
+            const medianYhat = medianOf(mainPoints.map(p => p.y));
+            if (Number.isFinite(medianYhat) && medianYhat !== 0) {
+                upperStdPct = (upperStd / medianYhat) * 100;
+                lowerStdPct = (lowerStd / medianYhat) * 100;
             }
+        }
+    } else if ((mode === 'local_stddev' || mode === 'lowess_stddev') && mainPoints.length > 0) {
+        // Average the per-point offset across all curve points to get a single representative %.
+        // upperOffset/lowerOffset are already closed over, so sample them directly.
+        const medianYhat = medianOf(mainPoints.map(p => p.y));
+        if (Number.isFinite(medianYhat) && medianYhat !== 0) {
+            const meanUpperDelta = mainPoints.reduce((s, p) => {
+                const upper = upperOffset(p.x, p.y);
+                return Number.isFinite(upper) ? s + (upper - p.y) : s;
+            }, 0) / mainPoints.length;
+            const meanLowerDelta = mainPoints.reduce((s, p) => {
+                const lower = lowerOffset(p.x, p.y);
+                return Number.isFinite(lower) ? s + (p.y - lower) : s;
+            }, 0) / mainPoints.length;
+            upperStdPct = (meanUpperDelta / medianYhat) * 100;
+            lowerStdPct = (meanLowerDelta / medianYhat) * 100;
         }
     }
 
-    return { upperBandPoints, lowerBandPoints, upperStdPct, lowerStdPct };
+    // Classify each raw data point relative to the band boundaries.
+    // For each point we evaluate the predictor and both offsets at that exact x,
+    // so there is no interpolation error from the discrete curve grid.
+    //
+    // "inside" = point falls between lowerBand and upperBand (wholly within the envelope)
+    // "upper strip" = point is above the fit line but within the upper band
+    //                 (i.e. fit(x) ≤ y ≤ upperOffset(x, fit(x)))
+    // "lower strip" = point is below the fit line but within the lower band
+    //                 (i.e. lowerOffset(x, fit(x)) ≤ y < fit(x))
+    //
+    // "proportion in upper strip" = upperStripCount / aboveFitCount
+    // "proportion in lower strip" = lowerStripCount / belowFitCount
+    let pointStats = null;
+    const classifiableData = rawData.filter(p => Number.isFinite(p.x) && Number.isFinite(p.y));
+    if (classifiableData.length > 0) {
+        let insideCount = 0, outsideCount = 0;
+        let aboveFitCount = 0, belowFitCount = 0;
+        let upperStripCount = 0, lowerStripCount = 0;
+
+        for (const p of classifiableData) {
+            const yFit = predictor(p.x);
+            if (!Number.isFinite(yFit)) continue;
+
+            const yUpper = upperOffset(p.x, yFit);
+            const yLower = lowerOffset(p.x, yFit);
+            if (!Number.isFinite(yUpper) || !Number.isFinite(yLower)) continue;
+
+            const inside = p.y >= yLower && p.y <= yUpper;
+            if (inside) insideCount++; else outsideCount++;
+
+            if (p.y >= yFit) {
+                aboveFitCount++;
+                if (p.y <= yUpper) upperStripCount++;
+            } else {
+                belowFitCount++;
+                if (p.y >= yLower) lowerStripCount++;
+            }
+        }
+
+        pointStats = {
+            insideCount,
+            outsideCount,
+            total: insideCount + outsideCount,
+            upperStripCount,
+            aboveFitCount,
+            lowerStripCount,
+            belowFitCount,
+            upperStripProportion: aboveFitCount > 0 ? upperStripCount / aboveFitCount : null,
+            lowerStripProportion: belowFitCount > 0 ? lowerStripCount / belowFitCount : null,
+        };
+    }
+
+    return { upperBandPoints, lowerBandPoints, upperStdPct, lowerStdPct, pointStats };
 };
 /**
  * @fileoverview Mathematical utilities for curve fitting algorithms and statistical analysis.
@@ -646,13 +990,29 @@ export const fitPolynomial = (data, order) => {
         throw new Error(`Failed to construct normal equations: ${error.message}`);
     }
 
-    // Check condition number (rough estimate)
-    const diagonalProduct = matrix.reduce((prod, row, i) => prod * Math.abs(row[i]), 1);
-    const matrixNorm = Math.max(...matrix.flat().map(Math.abs));
-    const conditionEstimate = matrixNorm ** n / Math.abs(diagonalProduct);
-
-    if (conditionEstimate > 1e12) {
-        debugWarn(`Matrix is poorly conditioned (est. condition number: ${conditionEstimate.toExponential(2)}). Results may be unreliable.`);
+    // Check condition number via pivot ratio from forward elimination (cheap surrogate for ||A||·||A⁻¹||)
+    {
+        const work = matrix.map(row => [...row]);
+        let maxPivot = 0;
+        let minPivot = Infinity;
+        for (let i = 0; i < n; i++) {
+            let maxRow = i;
+            for (let j = i + 1; j < n; j++) {
+                if (Math.abs(work[j][i]) > Math.abs(work[maxRow][i])) maxRow = j;
+            }
+            if (maxRow !== i) [work[i], work[maxRow]] = [work[maxRow], work[i]];
+            const pivot = Math.abs(work[i][i]);
+            if (pivot > maxPivot) maxPivot = pivot;
+            if (pivot < minPivot) minPivot = pivot;
+            for (let j = i + 1; j < n; j++) {
+                const factor = work[j][i] / work[i][i];
+                for (let k = i; k < n; k++) work[j][k] -= factor * work[i][k];
+            }
+        }
+        const conditionEstimate = minPivot > 0 ? maxPivot / minPivot : Infinity;
+        if (conditionEstimate > 1e12) {
+            debugWarn(`Matrix is poorly conditioned (pivot ratio: ${conditionEstimate.toExponential(2)}). Results may be unreliable.`);
+        }
     }
 
     const normalizedCoefficients = gaussianElimination(matrix, vector);
@@ -821,18 +1181,17 @@ export const fitPowerLaw = (data) => {
             throw new Error('Power law coefficient is invalid');
         }
 
-        // Calculate R-squared on original data
-        const meanY = validData.reduce((sum, p) => sum + p.y, 0) / validData.length;
+        // Calculate R-squared in log-log space — consistent with the regression, which
+        // minimised log-space residuals.  Tools like Excel, scipy, and OriginLab all
+        // report log-space R² for power law fits, so this matches peer software.
+        const meanLogY = sumY / n; // already computed above as sumY over logData
         let ssTot = 0;
         let ssRes = 0;
 
-        for (const point of validData) {
-            const yPred = a * point.x ** power;
-            if (!Number.isFinite(yPred)) {
-                throw new Error('Power law prediction produced invalid values');
-            }
-            ssTot += (point.y - meanY) ** 2;
-            ssRes += (point.y - yPred) ** 2;
+        for (const point of logData) {
+            const logYPred = Math.log(a) + power * point.x; // = intercept + slope * ln(x)
+            ssTot += (point.y - meanLogY) ** 2;
+            ssRes += (point.y - logYPred) ** 2;
         }
 
         const rSquared = ssTot === 0 ? 1 : Math.max(0, Math.min(1, 1 - (ssRes / ssTot)));
@@ -847,7 +1206,8 @@ export const fitPowerLaw = (data) => {
             }
         };
 
-        const equation = `y = ${formatCoefficient(a)}x^${formatCoefficient(power)}`;
+        const powerSign = power < 0 ? '-' : '';
+        const equation = `y = ${formatCoefficient(a)}x^${powerSign}${formatCoefficient(power)}`;
 
         return {
             coefficients: [a, power],
@@ -858,6 +1218,81 @@ export const fitPowerLaw = (data) => {
         };
     } catch (error) {
         throw new Error(`Power law fitting failed: ${error.message}`);
+    }
+};
+
+export const fitExponential = (data) => {
+    if (!Array.isArray(data) || data.length === 0) {
+        throw new Error('Data must be a non-empty array');
+    }
+
+    // Exponential fit requires y > 0 (we linearise via ln(y))
+    const validData = data.filter(p =>
+        p &&
+        typeof p.x === 'number' &&
+        typeof p.y === 'number' &&
+        p.y > 0 &&
+        Number.isFinite(p.x) &&
+        Number.isFinite(p.y)
+    );
+
+    if (validData.length < 2) {
+        throw new Error(`Not enough positive-y data points for exponential fitting. Need at least 2, got ${validData.length}.`);
+    }
+
+    try {
+        // Linearise: ln(y) = ln(a) + b*x  →  simple linear regression on (x, ln(y))
+        const logData = validData.map(p => ({ x: p.x, lnY: Math.log(p.y) }));
+
+        const n = logData.length;
+        const sumX   = logData.reduce((s, p) => s + p.x, 0);
+        const sumLnY = logData.reduce((s, p) => s + p.lnY, 0);
+        const sumXLnY = logData.reduce((s, p) => s + p.x * p.lnY, 0);
+        const sumX2  = logData.reduce((s, p) => s + p.x * p.x, 0);
+
+        const denominator = n * sumX2 - sumX * sumX;
+        if (Math.abs(denominator) < 1e-12) {
+            throw new Error('Cannot fit exponential: insufficient variation in x values');
+        }
+
+        const b = (n * sumXLnY - sumX * sumLnY) / denominator;
+        const lnA = (sumLnY - b * sumX) / n;
+        const a = Math.exp(lnA);
+
+        if (!Number.isFinite(a) || !Number.isFinite(b) || a <= 0) {
+            throw new Error('Exponential fit produced invalid coefficients');
+        }
+
+        // R² computed on original (non-log) scale
+        const meanY = validData.reduce((s, p) => s + p.y, 0) / validData.length;
+        let ssTot = 0, ssRes = 0;
+        for (const p of validData) {
+            const yPred = a * Math.exp(b * p.x);
+            if (!Number.isFinite(yPred)) throw new Error('Exponential prediction produced invalid values');
+            ssTot += (p.y - meanY) ** 2;
+            ssRes += (p.y - yPred) ** 2;
+        }
+
+        const rSquared = ssTot === 0 ? 1 : Math.max(0, Math.min(1, 1 - ssRes / ssTot));
+
+        const formatVal = (val) => {
+            const abs = Math.abs(val);
+            const sign = val < 0 ? '-' : '';
+            const str = (abs >= 1e-1 && abs < 1e4) ? abs.toFixed(3) : abs.toExponential(3);
+            return sign + str;
+        };
+
+        const equation = `y = ${formatVal(a)} * exp(${formatVal(b)} * x)`;
+
+        return {
+            coefficients: [a, b],
+            rSquared,
+            equation,
+            fitType: 'Exponential',
+            dataPoints: validData.length
+        };
+    } catch (error) {
+        throw new Error(`Exponential fitting failed: ${error.message}`);
     }
 };
 
@@ -890,10 +1325,22 @@ export const findBestFit = (data) => {
     try {
         const fit = fitPowerLaw(data);
         if (fit.rSquared > bestRSquared) {
+            bestRSquared = fit.rSquared;
             bestFit = fit;
         }
     } catch (error) {
         errors.push(`Power law: ${error.message}`);
+    }
+
+    // Try exponential fit
+    try {
+        const fit = fitExponential(data);
+        if (fit.rSquared > bestRSquared) {
+            bestRSquared = fit.rSquared;
+            bestFit = fit;
+        }
+    } catch (error) {
+        errors.push(`Exponential: ${error.message}`);
     }
 
     if (!bestFit) {
@@ -922,14 +1369,14 @@ export const generateCurvePoints = (fit, xMin, xMax, numPoints = 100, isLogX = f
     if (isLogX && xMin > 0 && xMax > 0) {
         const logMin = Math.log10(xMin);
         const logMax = Math.log10(xMax);
-        const step = (logMax - logMin) / numPoints;
+        const step = (logMax - logMin) / (numPoints - 1);
         generateX = (i) => Math.pow(10, logMin + (step * i));
     } else {
-        const step = (xMax - xMin) / numPoints;
+        const step = (xMax - xMin) / (numPoints - 1);
         generateX = (i) => xMin + (step * i);
     }
 
-    for (let i = 0; i <= numPoints; i++) {
+    for (let i = 0; i < numPoints; i++) {
         const x = generateX(i);
         let y;
 
@@ -948,10 +1395,13 @@ export const generateCurvePoints = (fit, xMin, xMax, numPoints = 100, isLogX = f
                 }, 0);
             } else if (fit.fitType === 'Power Law') {
                 const [a, power] = fit.coefficients;
-                if (x <= 0 && power % 1 !== 0) {
-                    continue; // Skip negative x for non-integer powers
+                if (x <= 0) {
+                    continue; // Power law is fitted via ln(x), so x > 0 is always required
                 }
                 y = a * x ** power;
+            } else if (fit.fitType === 'Exponential') {
+                const [a, b] = fit.coefficients;
+                y = a * Math.exp(b * x);
             } else {
                 throw new Error(`Unknown fit type: ${fit.fitType}`);
             }
@@ -1065,16 +1515,31 @@ export const performCurveFitting = (csvData, config, curveFits) => {
         // Fall back to data extent when the user leaves min/max blank
         const parsedXMin = parseFloat(curveFit.xMin);
         const parsedXMax = parseFloat(curveFit.xMax);
-        const xMin = Number.isFinite(parsedXMin) ? parsedXMin : dataXMin;
+        let xMin = Number.isFinite(parsedXMin) ? parsedXMin : dataXMin;
         const xMax = Number.isFinite(parsedXMax) ? parsedXMax : dataXMax;
+
+        // Power law and custom fits require x > 0 (ln(x) is undefined at x ≤ 0).
+        // Clamp the drawing xMin to a small epsilon proportional to the data scale
+        // so the curve extends as far left as meaningful without hitting the singularity.
+        const needsPositiveX = curveFit.fitType === 'power_law' || curveFit.fitType === 'custom';
+        if (needsPositiveX && xMin <= 0) {
+            // Scale epsilon with the data magnitude so it is meaningful regardless of units
+            // (millisecond timestamps vs. micrometres vs. years all handled correctly).
+            const epsilon = Math.max(1e-9 * Math.abs(dataXMax), 1e-9);
+            xMin = epsilon;
+            debugLog(`Curve fit ${index + 1}: xMin ≤ 0 clamped to ε=${epsilon} for ${curveFit.fitType}`);
+        }
 
         if (!Number.isFinite(xMin) || !Number.isFinite(xMax) || xMin >= xMax) {
             debugWarn(`Invalid range for curve fit ${index + 1}: [${xMin}, ${xMax}]`);
             return { ...curveFit, result: null };
         }
 
-        // Filter data for this specific range
-        const rangeData = validData.filter(d => d.x >= xMin && d.x <= xMax);
+        // For fitting, use only data that actually exists in the range [xMin, xMax].
+        // The drawing range (used for generateCurvePoints below) may extend below the
+        // data minimum (extrapolation), but fitting must use real data points only.
+        const fitXMin = Math.max(xMin, dataXMin);
+        const rangeData = validData.filter(d => d.x >= fitXMin && d.x <= xMax);
         debugLog(`Curve fit ${index + 1}: ${rangeData.length} points in range [${xMin}, ${xMax}]`);
 
         if (rangeData.length < 3) {
@@ -1097,6 +1562,10 @@ export const performCurveFitting = (csvData, config, curveFits) => {
                 }
                 case 'power_law':
                     fitResult = fitPowerLaw(rangeData);
+                    break;
+
+                case 'exponential':
+                    fitResult = fitExponential(rangeData);
                     break;
 
                 case 'best_fit':
@@ -1123,7 +1592,9 @@ export const performCurveFitting = (csvData, config, curveFits) => {
                 ? fitResult.evaluator
                 : fitResult.fitType.includes('Polynomial')
                     ? (x) => fitResult.coefficients.reduce((s, c, j) => s + c * x ** j, 0)
-                    : (x) => fitResult.coefficients[0] * x ** fitResult.coefficients[1];
+                    : fitResult.fitType === 'Exponential'
+                        ? (x) => fitResult.coefficients[0] * Math.exp(fitResult.coefficients[1] * x)
+                        : (x) => fitResult.coefficients[0] * x ** fitResult.coefficients[1]; // Power Law
 
             // Generate confidence bands if configured
             let confidenceBands = null;
@@ -1148,7 +1619,19 @@ export const performCurveFitting = (csvData, config, curveFits) => {
             
             // Convert equation string from f(x) to log(f(x)) if logY is enabled
             if (config?.logY) {
-                if (fitResult.fitType === 'Power Law') {
+                if (fitResult.fitType === 'Exponential') {
+                    const [a, b] = fitResult.coefficients;
+                    const log10a = Math.log10(a);
+                    // log10(y) = log10(a) + b * log10(e) * x
+                    const slope = b * Math.LOG10E;
+                    const formatVal = (val) => {
+                        const abs = Math.abs(val);
+                        const sign = val < 0 ? '-' : '';
+                        return sign + ((abs >= 1e-1 && abs < 1e4) ? abs.toFixed(3) : abs.toExponential(3));
+                    };
+                    const slopeSign = slope >= 0 ? '+' : '-';
+                    displayEquation = `log10(y) = ${formatVal(log10a)} ${slopeSign} ${formatVal(Math.abs(slope))} * x`;
+                } else if (fitResult.fitType === 'Power Law') {
                     const [a, power] = fitResult.coefficients;
                     // ... (Power Law formatting remains) ... Wait, I'll rewrite this cleanly
                     const logA = Math.log10(a);

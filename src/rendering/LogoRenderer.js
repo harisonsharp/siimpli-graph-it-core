@@ -42,8 +42,8 @@ export const renderLogo = (svg, logoImage, dimensions) => {
 
     // height in dimensions is already the inner graph height (fullHeight - margins)
     // We want to place the logo below the graph area
-    const logoX = margin.left - logoTargetWidth - 10;
-    const logoY = margin.top + height + 10;
+    const logoX = margin.left - logoTargetWidth - 20;
+    const logoY = margin.top + height + 20;
 
     svg.append("image")
         .attr("href", logoImage.src)

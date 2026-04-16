@@ -22,6 +22,34 @@ import { CanvasSizer } from '../services/CanvasSizer.js';
  * Renders data tables (hover and static) for graph visualization.
  */
 export class DataTableRenderer {
+    static _getXValueFromMouse(xScale, mouseX) {
+        if (typeof xScale?.invert === 'function') {
+            return xScale.invert(mouseX);
+        }
+
+        if (typeof xScale?.bandwidth === 'function' && typeof xScale?.domain === 'function') {
+            const domain = xScale.domain();
+            if (!Array.isArray(domain) || domain.length === 0) return null;
+
+            let nearest = domain[0];
+            let nearestDistance = Infinity;
+            domain.forEach((value) => {
+                const x = xScale(value);
+                if (x === undefined || x === null) return;
+                const center = x + xScale.bandwidth() / 2;
+                const distance = Math.abs(center - mouseX);
+                if (distance < nearestDistance) {
+                    nearestDistance = distance;
+                    nearest = value;
+                }
+            });
+
+            return nearest;
+        }
+
+        return null;
+    }
+
     /**
      * Main entry point to render the interaction layer (overlay + tables).
      * 
@@ -97,7 +125,8 @@ export class DataTableRenderer {
                 if (!showDataTable) return;
 
                 const [mouseX] = d3.pointer(event);
-                const x0 = scales.xScale.invert(mouseX);
+                const x0 = this._getXValueFromMouse(scales.xScale, mouseX);
+                if (x0 === null || x0 === undefined) return;
                 debugLog('mouseX', mouseX);
                 debugLog('x0', x0);
                 this._updateHoverTable(
@@ -118,7 +147,8 @@ export class DataTableRenderer {
                 // Click Interaction for Static Table
                 if (showStaticTable && !isBatchMode) {
                     const [mouseX] = d3.pointer(event);
-                    const x0 = scales.xScale.invert(mouseX);
+                    const x0 = this._getXValueFromMouse(scales.xScale, mouseX);
+                    if (x0 === null || x0 === undefined) return;
 
                     if (callbacks.onXValueSelect) {
                         callbacks.onXValueSelect(x0);

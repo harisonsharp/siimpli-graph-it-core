@@ -1,0 +1,98 @@
+﻿{
+    "project_key":  "siimpli-graph-it-core",
+    "ai_adoption_date":  "2026-01-01",
+    "ai_adoption_confidence":  "approximate",
+    "ai_adoption_evidence":  "manual boundary for core run",
+    "history_available":  false,
+    "snapshot_only":  false,
+    "defect_density":  {
+                           "pre_ai":  {
+                                          "bugs":  1,
+                                          "ncloc":  6106,
+                                          "calculated_per_1000":  0.164
+                                      },
+                           "post_ai":  {
+                                           "bugs":  2,
+                                           "ncloc":  9922,
+                                           "calculated_per_1000":  0.202
+                                       },
+                           "delta_direction":  "increase",
+                           "data_source":  "manual_read"
+                       },
+    "code_churn":  {
+                       "collection_method":  "git_direct",
+                       "pre_ai":  {
+                                      "value":  0,
+                                      "unit":  "% of lines / 60 days"
+                                  },
+                       "post_ai":  {
+                                       "value":  6.344,
+                                       "unit":  "% of lines / 60 days"
+                                   },
+                       "delta_direction":  "increase"
+                   },
+    "security":  {
+                     "pre_ai":  {
+                                    "security_hotspots":  1,
+                                    "confirmed_vulnerabilities":  0
+                                },
+                     "post_ai":  {
+                                     "security_hotspots":  18,
+                                     "confirmed_vulnerabilities":  0
+                                 },
+                     "delta_direction":  "increase",
+                     "data_source":  "manual_read"
+                 },
+    "duplication":  {
+                        "pre_ai":  {
+                                       "percent":  0.8
+                                   },
+                        "post_ai":  {
+                                        "percent":  1.4
+                                    },
+                        "delta_direction":  "increase",
+                        "data_source":  "manual_read"
+                    },
+    "quality_gate":  {
+                         "pre_ai_status":  "PASSED",
+                         "post_ai_status":  "PASSED"
+                     },
+    "technical_debt_ratio":  {
+                                 "pre_ai":  {
+                                                "percent":  0.9
+                                            },
+                                 "post_ai":  {
+                                                 "percent":  0.8
+                                             }
+                             },
+    "test_coverage":  {
+                          "pre_ai":  {
+                                         "percent":  0
+                                     },
+                          "post_ai":  {
+                                          "percent":  0
+                                      },
+                          "note":  ""
+                      },
+    "codebase_size":  {
+                          "pre_ai_ncloc":  6106,
+                          "post_ai_ncloc":  9922
+                      },
+    "issue_type_breakdown_post_ai":  {
+                                         "code_smells":  461,
+                                         "bugs":  2,
+                                         "security_hotspots":  18,
+                                         "total":  481,
+                                         "code_smells_pct":  95.842,
+                                         "bugs_pct":  0.416,
+                                         "security_pct":  3.742,
+                                         "collection_date":  "2026-04-08"
+                                     },
+    "preflight_failures":  [
+
+                           ],
+    "validation_warnings":  [
+
+                            ],
+    "collection_notes":  "Synthetic git baseline mode enabled using refs 5c06d35cdd011024bcee4893baf3ad9763b1d334 (pre) and c450997a849d76db9bd5de7c379087c9dbdcf728 (post)."
+}
