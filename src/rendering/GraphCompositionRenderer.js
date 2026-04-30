@@ -379,6 +379,15 @@ export class GraphCompositionRenderer {
 
                     const area = d3.area()
                         .curve(d3.curveBasis)
+                        .defined(d => {
+                            // Lift the pen for points where either band edge is above the plot top
+                            // (very negative pixel value on SVG's inverted y axis). Without this,
+                            // curveBasis arcs back into the visible viewport between two clamped
+                            // off-screen points, producing a spurious vertical line at the left edge.
+                            const y0px = thisYScale(d.y0);
+                            const y1px = thisYScale(d.y1);
+                            return y0px > -SAFE_LIMIT && y1px > -SAFE_LIMIT;
+                        })
                         .x(d => {
                             const xVal = effectiveXScale(d.x);
                             return Number.isNaN(xVal) ? 0 : Math.max(-SAFE_LIMIT, Math.min(plotWidth + SAFE_LIMIT, xVal));

@@ -4,6 +4,7 @@ on:
   push:
     tags:
       - 'v*'
+  workflow_dispatch:
 
 jobs:
   publish:
@@ -18,10 +19,28 @@ jobs:
         with:
           node-version: '20'
           registry-url: 'https://npm.pkg.github.com'
-          scope: '@siimpli'
+          scope: '@harisonsharp'
 
       - run: npm install
 
       - run: npm publish
         env:
           NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Cascade — trigger downstream compatibility checks
+        if: success() && github.event_name == 'push'
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.DISPATCH_PAT }}
+          script: |
+            const version = context.ref.replace('refs/tags/', '');
+            const repos = ['siimpli-graph-it-headless', 'siimpli-graph-it', 'mine_analytics'];
+            for (const repo of repos) {
+              await github.rest.repos.createDispatchEvent({
+                owner: 'harisonsharp',
+                repo,
+                event_type: 'core-published',
+                client_payload: { core_version: version },
+              });
+              console.log(`Dispatched core-published@${version} → ${repo}`);
+            }

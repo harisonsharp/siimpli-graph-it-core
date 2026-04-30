@@ -60,17 +60,8 @@ export function useGraphRenderer({
                 return false;
             }
 
-            const { margin } = result;
-            // The interaction layer and canvas sizing need validData, scales, columnInfo, dimensions
-            // To be 100% compliant with Ticket 1.2 "Add CanvasSizer and renderInteractionLayer calls AFTER renderGraph returns":
-            // However, useGraphRenderer still needs to call these functions which depend on validData, etc.
-            // But since renderGraph now does everything inside, CanvasSizer can still run since it works off the SVG DOM node.
-            
-            // To properly render the interaction layer, we really do need `g`, `svg`, `validData`, `scales`, `columnInfo`, `dimensions`
-            // Wait, look at DataTableRenderer.renderInteractionLayer. It builds a Voronoi overlay based on scales.
-            // If I omit the InteractionLayer, click to select doesn't work.
-            // The instructions for Ticket 1.2 say:
-            // "Add CanvasSizer and renderInteractionLayer calls *after* renderGraph() returns (they're UI-only concerns)."
+            if (onSuccess) onSuccess(result);
+            return true;
         } catch (error) {
             debugWarn('Failed to generate graph:', error);
             if (onError) onError(error);
