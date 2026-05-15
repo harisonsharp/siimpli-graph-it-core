@@ -120,11 +120,20 @@ export class DataTableRenderer {
             .style("pointer-events", "none");
 
         // 5. Attach Event Listeners
+        // Returns mouse X in original (pre-zoom) plot-pixel space by inverting the
+        // zoom transform stored on the plot-clip group. At zoom identity this is a no-op.
+        const getOriginalMouseX = (event) => {
+            const clipGroupNode = g.select('.plot-clip').node();
+            if (!clipGroupNode) return d3.pointer(event)[0];
+            const [rawX] = d3.pointer(event, clipGroupNode);
+            return d3.zoomTransform(clipGroupNode).invertX(rawX);
+        };
+
         overlay
             .on("mousemove", (event) => {
                 if (!showDataTable) return;
 
-                const [mouseX] = d3.pointer(event);
+                const mouseX = getOriginalMouseX(event);
                 const x0 = this._getXValueFromMouse(scales.xScale, mouseX);
                 if (x0 === null || x0 === undefined) return;
                 debugLog('mouseX', mouseX);
@@ -146,7 +155,7 @@ export class DataTableRenderer {
             .on("click", (event) => {
                 // Click Interaction for Static Table
                 if (showStaticTable && !isBatchMode) {
-                    const [mouseX] = d3.pointer(event);
+                    const mouseX = getOriginalMouseX(event);
                     const x0 = this._getXValueFromMouse(scales.xScale, mouseX);
                     if (x0 === null || x0 === undefined) return;
 

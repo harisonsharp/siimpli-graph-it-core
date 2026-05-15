@@ -111,12 +111,13 @@ export class HistogramRenderer extends BaseChartRenderer {
         const numBinsOverride = config?.numBins ? Number(config.numBins) : null;
         let bins = generateCustomBins(values, numBinsOverride);
 
-        // Back-transform bin boundaries from log10 space to raw space
+        // For logX: store raw boundaries for display (labels/table) but keep min/max
+        // in log₁₀ space so xScale (which has a log₁₀ domain) maps bars correctly.
         if (logX) {
             bins = bins.map(b => ({
                 ...b,
-                min: 10 ** b.min,
-                max: 10 ** b.max,
+                rawMin: 10 ** b.min,
+                rawMax: 10 ** b.max,
             }));
         }
 
@@ -134,7 +135,9 @@ export class HistogramRenderer extends BaseChartRenderer {
 
         // Render stats table below the chart
         const outlierCount = outlierBins.reduce((sum, b) => sum + b.values.length, 0);
-        const binWidth = normalBins.length > 0 ? (normalBins[0].max - normalBins[0].min) : 0;
+        const logBinWidth = normalBins.length > 0 ? (normalBins[0].max - normalBins[0].min) : 0;
+        // For logX show the geometric factor (e.g. 3.16× per bin); linear otherwise.
+        const binWidth = logX ? 10 ** logBinWidth : logBinWidth;
         this.renderStatsTable(g, yScale, binWidth, outlierCount, logY);
     }
 
@@ -146,8 +149,8 @@ export class HistogramRenderer extends BaseChartRenderer {
      * @param {d3.Scale} yScale - Y-axis scale
      */
     renderNormalBins(g, bins, xScale, yScale, logY = false) {
-        const yRange = yScale.range();
-        const chartBottom = Math.max(...yRange);
+        // Anchor bar bottoms at y=0 in data space — matches where drawAxes places the x-axis.
+        const chartBottom = yScale(0);
 
         g.selectAll('rect.histogram-bar')
             .data(bins)
@@ -181,9 +184,8 @@ export class HistogramRenderer extends BaseChartRenderer {
      * @param {d3.Scale} xScale - X-axis scale
      * @param {d3.Scale} yScale - Y-axis scale
      */
-    renderOutlierBin(g, outlierBin, normalBins, xScale, yScale, logY = false) { 
-        const yRange = yScale.range();
-        const chartBottom = Math.max(...yRange);
+    renderOutlierBin(g, outlierBin, normalBins, xScale, yScale, logY = false) {
+        const chartBottom = yScale(0);
         
         const lastBin = normalBins[normalBins.length - 1];
         const binWidth = xScale(lastBin.max) - xScale(lastBin.min);
@@ -254,10 +256,7 @@ export class HistogramRenderer extends BaseChartRenderer {
      * @param {number} outlierCount - Number of outlier data points
      */
     renderStatsTable(g, yScale, binWidth, outlierCount, logY = false) {
-        // Read the visual bottom of the chart natively from the scale's range
-        // rather than passing an extreme log dummy value which bloats CanvasSizer bounds
-        const yRange = yScale.range();
-        const chartBottom = Math.max(...yRange);
+        const chartBottom = yScale(0);
         
         const tableY = chartBottom + 36;
         const tableX = 0;

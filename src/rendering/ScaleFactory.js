@@ -504,9 +504,13 @@ export class ScaleFactory {
                 ? [Math.log10(Math.max(staticYScale.min, 1e-10)), Math.log10(Math.max(staticYScale.max, 1e-10))]
                 : [staticYScale.min, staticYScale.max];
         } else if (config.logY) {
-            yDomain = this.addDomainPadding(0, Math.log10(Math.max(maxCount, 1)));
+            // Clamp to at least log10(2) so log10(maxCount=1)=0 never creates a zero-range
+            // domain (which triggers the [-1,1] fallback and misaligns bars with the x-axis).
+            const logMax = Math.max(Math.log10(Math.max(maxCount, 1)), Math.log10(2));
+            yDomain = [0, logMax * 1.05];
         } else {
-            yDomain = this.addDomainPadding(0, maxCount);
+            // 5% top headroom; keep min at exactly 0 so bars always sit on the x-axis.
+            yDomain = [0, maxCount * 1.05];
         }
         const yScale = this.createLinearScale(yDomain, [height, 0]);
 

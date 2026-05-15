@@ -171,7 +171,8 @@ const drawXAxis = (g, xScale, xAxisY, xAxisLabelOffset, xAxisLabel, graphType, d
             const numBinsOverride = config?.numBins ? Number(config.numBins) : null;
             let bins = generateCustomBins(binValues, numBinsOverride);
             if (logX) {
-                bins = bins.map(b => ({ ...b, min: 10 ** b.min, max: 10 ** b.max }));
+                // Keep min/max in log₁₀ space for tick positioning; store raw for labels.
+                bins = bins.map(b => ({ ...b, rawMin: 10 ** b.min, rawMax: 10 ** b.max }));
             }
             const normalBins = bins.filter(b => !b.isOutlierBin);
             histogramBinCount = normalBins.length;
@@ -198,7 +199,10 @@ const drawXAxis = (g, xScale, xAxisY, xAxisLabelOffset, xAxisLabel, graphType, d
                     const bin = activeBins[i];
                     if (!bin) return '';
                     const precision = logX ? 3 : 1;
-                    return `${Number(bin.min.toFixed(precision))}-${Number(bin.max.toFixed(precision))}`;
+                    // Use raw values for display when available (logX bins keep min/max in log₁₀ space)
+                    const displayMin = bin.rawMin ?? bin.min;
+                    const displayMax = bin.rawMax ?? bin.max;
+                    return `${Number(displayMin.toFixed(precision))}-${Number(displayMax.toFixed(precision))}`;
                 });
         }
     } else if (!xScale.bandwidth) {
