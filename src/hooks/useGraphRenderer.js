@@ -61,16 +61,29 @@ export function useGraphRenderer({
             }
 
             const { margin } = result;
-            // The interaction layer and canvas sizing need validData, scales, columnInfo, dimensions
-            // To be 100% compliant with Ticket 1.2 "Add CanvasSizer and renderInteractionLayer calls AFTER renderGraph returns":
-            // However, useGraphRenderer still needs to call these functions which depend on validData, etc.
-            // But since renderGraph now does everything inside, CanvasSizer can still run since it works off the SVG DOM node.
-            
-            // To properly render the interaction layer, we really do need `g`, `svg`, `validData`, `scales`, `columnInfo`, `dimensions`
-            // Wait, look at DataTableRenderer.renderInteractionLayer. It builds a Voronoi overlay based on scales.
-            // If I omit the InteractionLayer, click to select doesn't work.
-            // The instructions for Ticket 1.2 say:
-            // "Add CanvasSizer and renderInteractionLayer calls *after* renderGraph() returns (they're UI-only concerns)."
+
+            let finalDimensions = null;
+            try {
+                const canvasSizer = new CanvasSizer(svgRef.current, {
+                    margins: { top: 10, right: 10, bottom: 10, left: 10 },
+                    minWidth: 400,
+                    minHeight: 300,
+                    maxWidth: 8192,
+                    maxHeight: 8192,
+                    expandMode: 'expand',
+                    dpiMultiplier: 1,
+                    debounceMs: 0
+                });
+                canvasSizer.updateFromDOMSync(svgRef.current);
+                const fitResult = canvasSizer.ensureFit();
+                finalDimensions = { width: fitResult.width, height: fitResult.height };
+                canvasSizer.teardown();
+            } catch (sizingError) {
+                debugWarn('[useGraphRenderer] Canvas sizing failed:', sizingError);
+            }
+
+            if (onSuccess) onSuccess({ success: true, margin, finalDimensions });
+            return true;
         } catch (error) {
             debugWarn('Failed to generate graph:', error);
             if (onError) onError(error);

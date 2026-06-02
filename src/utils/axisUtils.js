@@ -148,7 +148,7 @@ const buildTickValues = (min, max, step, maxTicks = 500) => {
     return ticks;
 };
 
-const drawXAxis = (g, xScale, xAxisY, xAxisLabelOffset, xAxisLabel, graphType, data, xAxisInfo, config = {}) => {
+const drawXAxis = (g, xScale, xAxisY, xAxisLabelOffset, xAxisLabel, graphType, data, xAxisInfo, config = {}, color = '#333') => {
     // Create axis generator
     const axisGenerator = d3.axisBottom(xScale);
     const staticXScale = getStaticScale(config, 'x');
@@ -246,7 +246,12 @@ const drawXAxis = (g, xScale, xAxisY, xAxisLabelOffset, xAxisLabel, graphType, d
 
     xAxis.selectAll('text')
         .style('font-family', 'sans-serif')
-        .style('font-size', '12px');
+        .style('font-size', '12px')
+        .style('fill', color);
+    xAxis.selectAll('line')
+        .style('stroke', color);
+    xAxis.select('.domain')
+        .style('stroke', color);
 
     // Rotation Logic
     // User request: "Bar charts with x-axis ticks texts that are nominal, corresponding with a date, or other non-numeric value should be rotated 45 degrees"
@@ -471,7 +476,7 @@ export const drawAxes = (
     const finalXLabel = config?.logX ? `${xAxisLabel} (log\u2081\u2080)` : xAxisLabel;
     const finalYLabelWithLog = config?.logY ? `${finalPrimaryLabel} (log\u2081\u2080)` : finalPrimaryLabel;
 
-    drawXAxis(g, xScale, xAxisY, 50, finalXLabel, graphType, data, xAxisInfo, config);
+    drawXAxis(g, xScale, xAxisY, 50, finalXLabel, graphType, data, xAxisInfo, config, primaryColor);
     drawPrimaryYAxis(g, xScale, primaryYScale, yAxisX, primaryColor, config);
     debugLog('[drawAxes] Secondary Y Scale and isDualAxis: ', secondaryYScale, isDualAxis);
     if (isDualAxis && secondaryYScale) {

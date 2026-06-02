@@ -18,6 +18,7 @@ export const GraphController = forwardRef(({
     csvData,
     graphConfig,
     globalSettings,
+    curveFits = [],
     logoImage,
     logoReady = true,
     onGraphGenerated,
@@ -33,11 +34,12 @@ export const GraphController = forwardRef(({
         csvData,
         graphConfig,
         globalSettings,
+        curveFits,
         logoImage,
         logoReady,
         getAxisIntercepts: (x, y, c) => calculateAxisIntercepts(x, y, c || graphConfig, globalSettings),
-        colorSchemes: {}, // TODO: pass color schemes or use default
-        onXValueSelect: () => { } // Optional interaction handler
+        colorSchemes: {},
+        onXValueSelect: () => { }
     });
 
     useImperativeHandle(ref, () => ({
