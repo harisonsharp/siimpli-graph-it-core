@@ -60,6 +60,7 @@ export function useGraphRenderer({
                 return false;
             }
 
+<<<<<<< HEAD
             const { margin } = result;
 
             let finalDimensions = null;
@@ -83,6 +84,9 @@ export function useGraphRenderer({
             }
 
             if (onSuccess) onSuccess({ success: true, margin, finalDimensions });
+=======
+            if (onSuccess) onSuccess(result);
+>>>>>>> 5f29d9bfdf926396b5e818d6f86111f0c920e77d
             return true;
         } catch (error) {
             debugWarn('Failed to generate graph:', error);

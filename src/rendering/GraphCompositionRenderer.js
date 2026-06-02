@@ -294,16 +294,20 @@ export class GraphCompositionRenderer {
             }
 
             const SAFE_LIMIT = 5000;
-            
+            // Log-axis scales have log10-transformed domains and expect pre-transformed inputs,
+            // matching the pattern used by ScatterChartRenderer and LineChartRenderer.
+            const mapX = (v) => _config?.logX && v > 0 ? Math.log10(v) : v;
+            const mapY = (v) => _config?.logY && v > 0 ? Math.log10(v) : v;
+
             const line = d3.line()
                 .curve(d3.curveBasis)
                 .x(d => {
-                    const xValue = effectiveXScale(d.x);
+                    const xValue = effectiveXScale(mapX(d.x));
                     if (Number.isNaN(xValue)) return 0;
                     return Math.max(-SAFE_LIMIT, Math.min(plotWidth + SAFE_LIMIT, xValue));
                 })
                 .y(d => {
-                    const yValue = thisYScale(d.y);
+                    const yValue = thisYScale(mapY(d.y));
                     if (Number.isNaN(yValue)) return 0;
                     return Math.max(-SAFE_LIMIT, Math.min(plotHeight + SAFE_LIMIT, yValue));
                 });
@@ -322,21 +326,24 @@ export class GraphCompositionRenderer {
             // user-specified extensions beyond the data extent are rendered correctly.
             // result.xMin/xMax are the authoritative numeric values set by performCurveFitting
             // (already clamped to ε for power law / custom fits with xMin ≤ 0).
-            const fitXMin = Number.isFinite(curveFit.result.xMin) ? curveFit.result.xMin : xScaleDomMin;
-            const fitXMax = Number.isFinite(curveFit.result.xMax) ? curveFit.result.xMax : xScaleDomMax;
+            // result.xMin/xMax are raw data-space values; convert to scale space for comparison
+            // against xScaleDomMin/Max which are already log10-transformed when logX is active.
+            const fitXMin = Number.isFinite(curveFit.result.xMin) ? mapX(curveFit.result.xMin) : xScaleDomMin;
+            const fitXMax = Number.isFinite(curveFit.result.xMax) ? mapX(curveFit.result.xMax) : xScaleDomMax;
             const xDomMin = Math.min(xScaleDomMin, fitXMin);
             const xDomMax = Math.max(xScaleDomMax, fitXMax);
             const validPoints = curveFit.result.curvePoints.filter(d => {
                 const xNum = +d.x;
+                const mx = mapX(xNum);
 
                 // Clamp to x domain only — curves may extend beyond the y data range
                 // (e.g. with a static Y scale). Out-of-bounds y values are handled by
                 // the clipPath applied to the rendered paths above.
                 return Number.isFinite(xNum) &&
                     Number.isFinite(d.y) &&
-                    !Number.isNaN(effectiveXScale(xNum)) &&
-                    !Number.isNaN(thisYScale(d.y)) &&
-                    xNum >= xDomMin && xNum <= xDomMax;
+                    !Number.isNaN(effectiveXScale(mx)) &&
+                    !Number.isNaN(thisYScale(mapY(d.y))) &&
+                    mx >= xDomMin && mx <= xDomMax;
             });
 
             if (validPoints.length === 0) {
@@ -369,26 +376,36 @@ export class GraphCompositionRenderer {
                         // the y domain are still rendered (clipped by the clipPath). Filtering on
                         // y would drop the leftmost band points when the band extends above/below
                         // the visible y range, creating a false vertical edge at the band start.
-                        return !Number.isNaN(effectiveXScale(p.x)) &&
-                            !Number.isNaN(thisYScale(p.y1)) &&
-                            !Number.isNaN(thisYScale(p.y0)) &&
-                            p.x >= xDomMin && p.x <= xDomMax;
+                        const mx = mapX(p.x);
+                        return !Number.isNaN(effectiveXScale(mx)) &&
+                            !Number.isNaN(thisYScale(mapY(p.y1))) &&
+                            !Number.isNaN(thisYScale(mapY(p.y0))) &&
+                            mx >= xDomMin && mx <= xDomMax;
                     });
 
                     if (pairedPoints.length === 0) return;
 
                     const area = d3.area()
                         .curve(d3.curveBasis)
+                        .defined(d => {
+                            // Lift the pen for points where either band edge is above the plot top
+                            // (very negative pixel value on SVG's inverted y axis). Without this,
+                            // curveBasis arcs back into the visible viewport between two clamped
+                            // off-screen points, producing a spurious vertical line at the left edge.
+                            const y0px = thisYScale(mapY(d.y0));
+                            const y1px = thisYScale(mapY(d.y1));
+                            return y0px > -SAFE_LIMIT && y1px > -SAFE_LIMIT;
+                        })
                         .x(d => {
-                            const xVal = effectiveXScale(d.x);
+                            const xVal = effectiveXScale(mapX(d.x));
                             return Number.isNaN(xVal) ? 0 : Math.max(-SAFE_LIMIT, Math.min(plotWidth + SAFE_LIMIT, xVal));
                         })
                         .y0(d => {
-                            const yVal = thisYScale(d.y0);
+                            const yVal = thisYScale(mapY(d.y0));
                             return Number.isNaN(yVal) ? 0 : Math.max(-SAFE_LIMIT, Math.min(plotHeight + SAFE_LIMIT, yVal));
                         })
                         .y1(d => {
-                            const yVal = thisYScale(d.y1);
+                            const yVal = thisYScale(mapY(d.y1));
                             return Number.isNaN(yVal) ? 0 : Math.max(-SAFE_LIMIT, Math.min(plotHeight + SAFE_LIMIT, yVal));
                         });
 

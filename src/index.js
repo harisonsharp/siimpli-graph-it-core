@@ -51,11 +51,18 @@ export * from './rendering/BiasTableRenderer.js';
 export * from './rendering/LogoRenderer.js';
 export * from './rendering/AnnotationRenderer.js';
 
+// Parsers
+export * from './utils/kcsvParser.js';
+
 // Core
 export * from './core/services/BatchProcessingService.js';
 export * from './core/validation/ConfigValidator.js';
 export * from './core/validation/DataValidator.js';
 export { renderGraph } from './core/renderGraph.js';
+
+// TODO: migrate to a dedicated surface API / orchestration entry point once surface API is designed
+// Orchestration
+export * from './core/orchestration/GraphConfigLoader.js';
 
 // Note: React-dependent exports are commented out to prevent JSX loading errors in headless environment
 // These are only used by the GUI (@siimpli/graph-it) and not the headless CLI
