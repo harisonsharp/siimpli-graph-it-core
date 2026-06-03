@@ -217,11 +217,10 @@ const drawXAxis = (g, xScale, xAxisY, xAxisLabelOffset, xAxisLabel, graphType, d
         if (isTimeScale) {
             const [domainMin, domainMax] = domain;
             const rangeYears = (domainMax - domainMin) / (1000 * 60 * 60 * 24 * 365);
-            if (rangeYears > 10) {
-                axisGenerator.tickFormat(d3.timeFormat("%Y/%m/%d"));
-            } else {
+            if (rangeYears <= 10) {
                 axisGenerator.tickFormat(d3.timeFormat("%Y/%m"));
             }
+            // For ranges > 10 years let D3 auto-format (shows just the year, horizontal)
         } else {
             // Numeric X-Axis (Scatter, Line, etc.)
             if (staticXScale) {
@@ -276,16 +275,19 @@ const drawXAxis = (g, xScale, xAxisY, xAxisLabelOffset, xAxisLabel, graphType, d
             .attr('dy', '.15em')
             .attr('transform', 'rotate(-45)');
     } else {
-        // Check for Time Scale rotation
+        // Rotate time scale labels only for short ranges where %Y/%m labels are used
         const domain = xScale.domain();
         const isTimeScale = domain.length > 0 && domain.some(d => d instanceof Date);
 
         if (isTimeScale) {
-            xAxis.selectAll('text')
-                .style('text-anchor', 'end')
-                .attr('dx', '-.8em')
-                .attr('dy', '.15em')
-                .attr('transform', 'rotate(-45)');
+            const rangeYears = (domain[domain.length - 1] - domain[0]) / (1000 * 60 * 60 * 24 * 365);
+            if (rangeYears <= 10) {
+                xAxis.selectAll('text')
+                    .style('text-anchor', 'end')
+                    .attr('dx', '-.8em')
+                    .attr('dy', '.15em')
+                    .attr('transform', 'rotate(-45)');
+            }
         }
     }
 
