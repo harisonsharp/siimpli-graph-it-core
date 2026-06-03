@@ -109,7 +109,11 @@ export class HistogramRenderer extends BaseChartRenderer {
 
         // Generate bins using custom binning algorithm (override if user specified numBins)
         const numBinsOverride = config?.numBins ? Number(config.numBins) : null;
-        let bins = generateCustomBins(values, numBinsOverride);
+        const staticX = config?.staticScales?.x;
+        const skipOutliers = staticX?.enabled === true;
+        const domainMin = skipOutliers ? Number(staticX.min) : null;
+        const domainMax = skipOutliers ? Number(staticX.max) : null;
+        let bins = generateCustomBins(values, numBinsOverride, skipOutliers, domainMin, domainMax);
 
         // For logX: store raw boundaries for display (labels/table) but keep min/max
         // in log₁₀ space so xScale (which has a log₁₀ domain) maps bars correctly.

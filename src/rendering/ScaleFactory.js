@@ -485,17 +485,24 @@ export class ScaleFactory {
         const staticXScale = this.getStaticScaleConfig(config, 'x');
         let xDomain;
         if (staticXScale) {
+            // Extend 0.5 either side so the centered half-bins at the edges
+            // are fully visible and not clipped at the axis boundary.
+            const half = config.logX ? 0 : 0.5;
             xDomain = config.logX
                 ? [Math.log10(Math.max(staticXScale.min, 1e-10)), Math.log10(Math.max(staticXScale.max, 1e-10))]
-                : [staticXScale.min, staticXScale.max];
+                : [staticXScale.min - half, staticXScale.max + half];
         } else {
             xDomain = d3.extent(values); // already log-transformed when logX
         }
         const xScale = this.createLinearScale(xDomain, [0, width]);
 
         const numBinsOverride = config?.numBins ? Number(config.numBins) : null;
-        const bins = generateCustomBins(values, numBinsOverride);
-        const maxCount = bins.length > 0 ? d3.max(bins, bin => bin.values.length) : 1;
+        const skipOutliers = staticXScale !== null;
+        const domainMin = staticXScale ? Number(staticXScale.min) : null;
+        const domainMax = staticXScale ? Number(staticXScale.max) : null;
+        const bins = generateCustomBins(values, numBinsOverride, skipOutliers, domainMin, domainMax);
+        const normalBins = bins.filter(b => !b.isOutlierBin);
+        const maxCount = normalBins.length > 0 ? d3.max(normalBins, bin => bin.values.length) : 1;
 
         const staticYScale = this.getStaticScaleConfig(config, 'y');
         let yDomain;
