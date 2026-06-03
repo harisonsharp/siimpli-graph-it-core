@@ -183,7 +183,7 @@ const drawXAxis = (g, xScale, xAxisY, xAxisLabelOffset, xAxisLabel, graphType, d
             const [rangeStart, rangeEnd] = xScale.range();
             const chartWidth = Math.abs(rangeEnd - rangeStart);
             const pixelsPerBin = normalBins.length > 0 ? chartWidth / normalBins.length : chartWidth;
-            const MIN_LABEL_PX = 60;
+            const MIN_LABEL_PX = 40;
             const skipAlternate = pixelsPerBin < MIN_LABEL_PX;
 
             const activeBins = skipAlternate
