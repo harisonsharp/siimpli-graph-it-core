@@ -137,12 +137,6 @@ export class HistogramRenderer extends BaseChartRenderer {
             this.renderOutlierBin(g, outlierBins[0], normalBins, xScale, yScale, logY);
         }
 
-        // Render stats table below the chart
-        const outlierCount = outlierBins.reduce((sum, b) => sum + b.values.length, 0);
-        const logBinWidth = normalBins.length > 0 ? (normalBins[0].max - normalBins[0].min) : 0;
-        // For logX show the geometric factor (e.g. 3.16× per bin); linear otherwise.
-        const binWidth = logX ? 10 ** logBinWidth : logBinWidth;
-        this.renderStatsTable(g, yScale, binWidth, outlierCount, logY);
     }
 
     /**
