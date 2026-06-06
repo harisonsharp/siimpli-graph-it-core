@@ -165,7 +165,7 @@ function getZScoreForPercentile(p) {
 }
 
 
-// --- THE MAIN FUNCTION ---
+//  THE MAIN FUNCTION 
 
 /**
  * Finds the data value for a percentile assuming a normal distribution.
@@ -333,6 +333,106 @@ function generateCustomBins(dataSeries, numBinsOverride = null, skipOutliers = f
     return bins;
 }
 
+/**
+ * Generates histogram bins stacked by categorical grouping column 
+ * 
+ * Unlike generateCustomBins (which bins a flat number array), this function takes an array of row objects
+ * and produces per group counts inside each bin so the rendered can draw stacked bars. All groups share identical bin boundaries
+ * bin structure is derivec from the full x dataset, then each row is assigned to its bin and its group bucket. 
+ * @param {Object[]} data              - Array of row objects from the data source.
+ * @param {string}   xColumnName       - Key on each row for the numeric x value (e.g. 'base_case_discount_rate').
+ * @param {string}   stackByColumnName - Key on each row for the category label (e.g. 'commodity_group').
+ * @param {number|null} numBinsOverride - Forces this many bins (same as generateCustomBins).
+ * @param {boolean}  skipOutliers      - Drop values outside the declared domain instead of bucketing them.
+ * @param {number|null} domainMin      - Lower bound from staticScales.x.min.
+ * @param {number|null} domainMax      - Upper bound from staticScales.x.max.
+ * @returns {Array<{min, max, label, isOutlierBin, groups: Object, total: number}>}
+ */
+function generateStackedBins(
+    data,
+    xColumnName,
+    stackByColumnName,
+    numBinsOverride = null,
+    skipOutliers    = false,
+    domainMin       = null,
+    domainMax       = null
+) {
+    //  1. Extract flat x values and discover all unique group labels 
+    const xValues  = [];
+    const groupSet = new Set();
+
+    for (const row of data) {
+        const x     = Number(row[xColumnName]);
+        const group = row[stackByColumnName];
+        if (Number.isFinite(x)) xValues.push(x);
+        if (group != null && group !== '') groupSet.add(String(group));
+    }
+
+    // Sorted so group order is deterministic (same order = same legend every render)
+    const groupNames = [...groupSet].sort();
+
+    //  2. Build the bin skeleton using the existing logic 
+    // generateCustomBins handles domain clamping, bin centering, outlier logic, etc.
+    // We reuse it on the full x array to get consistent bin boundaries, then
+    // throw away the .values arrays — we recount per group below.
+    const skeletonBins = generateCustomBins(xValues, numBinsOverride, skipOutliers, domainMin, domainMax);
+
+    // Convert skeleton bins → stacked bins (add groups map and total)
+    const stackedBins = skeletonBins.map(bin => ({
+        min:        bin.min,
+        max:        bin.max,
+        label:      bin.label,
+        isOutlierBin: bin.isOutlierBin,
+        // Initialize every known group to 0 so the renderer can iterate reliably
+        groups:     Object.fromEntries(groupNames.map(g => [g, 0])),
+        total:      0,
+    }));
+
+    //  3. Recompute the bin-assignment parameters (must mirror generateCustomBins exactly) 
+    const hasDomain = domainMin !== null && Number.isFinite(domainMin) &&
+                      domainMax !== null && Number.isFinite(domainMax);
+
+    const rangeMin = hasDomain ? domainMin : (xValues.length ? Math.min(...xValues) : 0);
+    const rangeMax = hasDomain ? domainMax : (xValues.length ? Math.max(...xValues) : 1);
+
+    const normalBins = stackedBins.filter(b => !b.isOutlierBin);
+    const outlierBin = stackedBins.find(b => b.isOutlierBin) ?? null;
+    const n          = normalBins.length || 1;
+    const binWidth   = (rangeMax - rangeMin) / n;
+
+    //  4. Walk every row and assign to the right bin + group 
+    for (const row of data) {
+        const x     = Number(row[xColumnName]);
+        const group = String(row[stackByColumnName] ?? '');
+
+        if (!Number.isFinite(x)) continue;
+
+        if (x < rangeMin || x > rangeMax) {
+            // Outside declared domain — route to outlier bin if one exists
+            if (!skipOutliers && outlierBin) {
+                outlierBin.groups[group] = (outlierBin.groups[group] ?? 0) + 1;
+                outlierBin.total++;
+            }
+            continue;
+        }
+
+        // Exact mirror of the bin-index formula in generateCustomBins
+        let binIndex = hasDomain
+            ? Math.round((x - rangeMin) / binWidth - 0.5)
+            : Math.floor((x - rangeMin) / binWidth);
+        if (binIndex < 0) binIndex = 0;
+        if (binIndex >= normalBins.length) binIndex = normalBins.length - 1;
+
+        const bin = normalBins[binIndex];
+        if (bin) {
+            bin.groups[group] = (bin.groups[group] ?? 0) + 1;
+            bin.total++;
+        }
+    }
+
+    return stackedBins;
+}
+
 
 function calculateHeapingScores(data, base, tolerance = 1e-9) {
     if (data.length === 0) return 0.0;
@@ -414,4 +514,4 @@ function getHeapingAwareBinSize(data, fdBin) {
     return chosen;
 }
 
-export { generateCustomBins };
+export { generateCustomBins, generateStackedBins };
