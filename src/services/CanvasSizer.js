@@ -249,36 +249,72 @@ export class CanvasSizer {
      * Performs immediate measurement. Use this during imperative generation flows.
      * Gracefully handles environments where getBBox is unavailable (e.g., jsdom).
      *
-     * @param {SVGElement} groupElement - Optional group to measure
+     * When no groupElement is provided, iterates ALL direct SVG children and computes
+     * the union bounding box in SVG ROOT coordinates (applying each child's translate
+     * transform). This correctly captures legend and bias-table groups that are siblings
+     * of the main chart group rather than children of it.
+     *
+     * @param {SVGElement} groupElement - Optional specific group to measure (local coords)
      * @returns {CanvasSizer} this for chaining
      */
     updateFromDOMSync(groupElement = null) {
         try {
-            // Target the main content group or specified group
-            const target = groupElement || this.svgRoot.querySelector('g');
-
-            if (!target) {
-                console.warn('[CanvasSizer] No group element found for DOM measurement');
-                return this;
-            }
-
             let bbox = null;
 
-            // Try getBBox first (works in browsers)
-            try {
-                if (typeof target.getBBox === 'function') {
-                    bbox = target.getBBox();
+            if (groupElement) {
+                // Caller supplied a specific element — measure in its local coordinate space
+                try {
+                    if (typeof groupElement.getBBox === 'function') {
+                        bbox = groupElement.getBBox();
+                    }
+                } catch {}
+                if (!bbox) bbox = this._calculateBoundsFromElements(groupElement);
+            } else {
+                // No specific element: union ALL direct SVG children in SVG root coordinates.
+                // Each child's getBBox() returns local coords; we apply its translate() to get
+                // SVG-space coords so legend/bias-table groups (siblings, not children of chart g)
+                // are included in the measurement.
+                let xMin = Infinity, xMax = -Infinity;
+                let yMin = Infinity, yMax = -Infinity;
+                let found = false;
+
+                for (const child of this.svgRoot.children) {
+                    if (child.tagName === 'defs' || child.tagName === 'style' || child.tagName === 'filter') continue;
+                    try {
+                        if (typeof child.getBBox !== 'function') continue;
+                        const localBbox = child.getBBox();
+                        if (!localBbox || (localBbox.width === 0 && localBbox.height === 0)) continue;
+
+                        // Parse translate(tx, ty) from this child's transform attribute
+                        let tx = 0, ty = 0;
+                        const transformAttr = child.getAttribute('transform') || '';
+                        const tm = transformAttr.match(/translate\(\s*([-\d.]+)(?:[,\s]+([-\d.]+))?\s*\)/);
+                        if (tm) {
+                            tx = parseFloat(tm[1]) || 0;
+                            ty = parseFloat(tm[2] || '0') || 0;
+                        }
+
+                        xMin = Math.min(xMin, localBbox.x + tx);
+                        xMax = Math.max(xMax, localBbox.x + localBbox.width + tx);
+                        yMin = Math.min(yMin, localBbox.y + ty);
+                        yMax = Math.max(yMax, localBbox.y + localBbox.height + ty);
+                        found = true;
+                    } catch {}
                 }
-            } catch {
-                // getBBox not available, fall through to element-based measurement
+
+                if (found && isFinite(xMin)) {
+                    bbox = { x: xMin, y: yMin, width: xMax - xMin, height: yMax - yMin };
+                } else {
+                    // Fallback: first group in local coords (original behaviour)
+                    const firstGroup = this.svgRoot.querySelector('g');
+                    if (firstGroup) {
+                        try { bbox = firstGroup.getBBox(); } catch {}
+                        if (!bbox) bbox = this._calculateBoundsFromElements(firstGroup);
+                    }
+                }
             }
 
-            // Fallback: calculate bounds from elements (for headless/jsdom)
-            if (!bbox) {
-                bbox = this._calculateBoundsFromElements(target);
-            }
-
-            if (!bbox || bbox.width === 0 || bbox.height === 0) {
+            if (!bbox || (bbox.width === 0 && bbox.height === 0)) {
                 console.warn('[CanvasSizer] Invalid bounding box from DOM');
                 return this;
             }
@@ -449,9 +485,18 @@ export class CanvasSizer {
         const contentWidth = (xMax - xMin) + (minPadding * 2);
         const contentHeight = (yMax - yMin) + (minPadding * 2);
 
-        // Total dimensions including margins
-        const width = contentWidth + margins.left + margins.right;
-        const height = contentHeight + margins.top + margins.bottom;
+        // Total dimensions including margins on both sides
+        const widthFromSpan = contentWidth + margins.left + margins.right;
+        const heightFromSpan = contentHeight + margins.top + margins.bottom;
+
+        // Also ensure the SVG is wide/tall enough to contain content at its absolute
+        // SVG-space maximum (critical when extents are measured in SVG root coordinates
+        // and xMin/yMin are non-zero, e.g. chart group translated by its margins).
+        const widthFromAbsMax = xMax + margins.right + minPadding;
+        const heightFromAbsMax = yMax + margins.bottom + minPadding;
+
+        const width = Math.max(widthFromSpan, widthFromAbsMax);
+        const height = Math.max(heightFromSpan, heightFromAbsMax);
 
         return { width, height, contentWidth, contentHeight };
     }
