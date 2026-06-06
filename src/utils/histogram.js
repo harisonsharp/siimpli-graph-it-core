@@ -245,10 +245,10 @@ function FreedmanDiaconis(data) {
 
 
 // This gorups the data into the bins they belong in, makes the graphing app less code heavy by grouping and labelling data in this helper
-function generateCustomBins(dataSeries, numBinsOverride = null) {
+function generateCustomBins(dataSeries, numBinsOverride = null, skipOutliers = false, domainMin = null, domainMax = null) {
     let bulkData, outliers;
 
-    if (dataSeries && dataSeries.length > 100) {
+    if (!skipOutliers && dataSeries && dataSeries.length > 100) {
         ({ bulkData, outliers } = divideDataForBins(dataSeries));
     } else {
         bulkData = [...(dataSeries || [])];
@@ -266,8 +266,12 @@ function generateCustomBins(dataSeries, numBinsOverride = null) {
         }];
     }
 
-    const rangeMin = Math.min(...bulkData);
-    const rangeMax = Math.max(...bulkData);
+    // Use caller-supplied domain bounds (e.g. from staticScales) so bin edges
+    // land on whole numbers instead of the data's actual min/max.
+    const hasDomain = domainMin !== null && Number.isFinite(domainMin) &&
+                      domainMax !== null && Number.isFinite(domainMax);
+    const rangeMin = hasDomain ? domainMin : Math.min(...bulkData);
+    const rangeMax = hasDomain ? domainMax : Math.max(...bulkData);
 
     let desiredNumBins;
     if (numBinsOverride && Number.isFinite(numBinsOverride) && numBinsOverride >= 1) {
@@ -281,19 +285,24 @@ function generateCustomBins(dataSeries, numBinsOverride = null) {
 
     const finalBinWidth = (rangeMax - rangeMin) / desiredNumBins;
 
+    // When a fixed domain is supplied each bin value is a whole number (e.g. 5, 8, 10).
+    // Shift bin edges left by half a bin so bars are centered on those whole numbers
+    // rather than spanning [5,6) — i.e. the 5% bar becomes [4.5, 5.5).
+    const binOffset = hasDomain ? finalBinWidth / 2 : 0;
+
     // Build bins
     const bins = [];
     for (let i = 0; i < desiredNumBins; i++) {
         bins.push({
             label: `Bin ${i + 1}`,
-            min: rangeMin + i * finalBinWidth,
-            max: rangeMin + (i + 1) * finalBinWidth,
+            min: rangeMin + i * finalBinWidth - binOffset,
+            max: rangeMin + (i + 1) * finalBinWidth - binOffset,
             values: [],
             isOutlierBin: false
         });
     }
 
-    // Outlier bin
+    // Outlier bin — only added when outlier splitting is active
     const outlierBin = {
         label: 'Outliers',
         min: -Infinity,
@@ -301,14 +310,21 @@ function generateCustomBins(dataSeries, numBinsOverride = null) {
         values: [],
         isOutlierBin: true
     };
-    bins.push(outlierBin);
+    if (!skipOutliers) bins.push(outlierBin);
 
-    // Assign values to bins and return objects with value -> bin pairs
+    // Assign values to bins
     for (const value of dataSeries) {
         if (value < rangeMin || value > rangeMax) {
-            outlierBin.values.push(value);
+            if (!skipOutliers) outlierBin.values.push(value);
+            // when skipOutliers, values outside domain are simply dropped (they
+            // are genuinely out of the declared range, not statistical outliers)
         } else {
-            let binIndex = Math.floor((value - rangeMin) / finalBinWidth);
+            // With centered bins use round so 7.5 → bin for 8, 7.25 → bin for 7.
+            // Without centering use floor (original behaviour).
+            let binIndex = hasDomain
+                ? Math.round((value - rangeMin) / finalBinWidth - 0.5)
+                : Math.floor((value - rangeMin) / finalBinWidth);
+            if (binIndex < 0) binIndex = 0;
             if (binIndex >= desiredNumBins) binIndex = desiredNumBins - 1;
             bins[binIndex].values.push(value);
         }

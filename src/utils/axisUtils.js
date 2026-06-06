@@ -169,37 +169,41 @@ const drawXAxis = (g, xScale, xAxisY, xAxisLabelOffset, xAxisLabel, graphType, d
                 : rawValues;
 
             const numBinsOverride = config?.numBins ? Number(config.numBins) : null;
-            let bins = generateCustomBins(binValues, numBinsOverride);
+            const staticX = config?.staticScales?.x;
+            const skipOutliers = staticX?.enabled === true;
+            const domainMin = skipOutliers ? Number(staticX.min) : null;
+            const domainMax = skipOutliers ? Number(staticX.max) : null;
+            let bins = generateCustomBins(binValues, numBinsOverride, skipOutliers, domainMin, domainMax);
             if (logX) {
-                // Keep min/max in log₁₀ space for tick positioning; store raw for labels.
                 bins = bins.map(b => ({ ...b, rawMin: 10 ** b.min, rawMax: 10 ** b.max }));
             }
             const normalBins = bins.filter(b => !b.isOutlierBin);
             histogramBinCount = normalBins.length;
 
-            // Determine if labels would be too dense and skip every other bin if so.
-            // Each range label like "10.2-15.6" is roughly 80px wide; rotate adds some room
-            // but we still skip alternating bins when pixel-per-bin < threshold.
             const [rangeStart, rangeEnd] = xScale.range();
             const chartWidth = Math.abs(rangeEnd - rangeStart);
             const pixelsPerBin = normalBins.length > 0 ? chartWidth / normalBins.length : chartWidth;
             const MIN_LABEL_PX = 60;
             const skipAlternate = pixelsPerBin < MIN_LABEL_PX;
 
-            // Tick positions are bin midpoints in data space — correct for a linear scale.
-            // We use index (i) in tickFormat instead of searching by value to avoid
-            // floating-point round-trip errors from D3's scale inversion.
             const activeBins = skipAlternate
                 ? normalBins.filter((_, i) => i % 2 === 0)
                 : normalBins;
+
+            // When bins are centered on whole numbers (fixed domain), tick at the
+            // bin midpoint which equals the whole number. Label is just that integer.
+            // Otherwise fall back to range labels ("4.5-5.5" style).
             const tickValues = activeBins.map(b => (b.min + b.max) / 2);
 
             axisGenerator.tickValues(tickValues)
                 .tickFormat((_, i) => {
                     const bin = activeBins[i];
                     if (!bin) return '';
+                    if (skipOutliers && !logX) {
+                        // Bins are centered on whole numbers — label is just the integer
+                        return String(Math.round((bin.min + bin.max) / 2));
+                    }
                     const precision = logX ? 3 : 1;
-                    // Use raw values for display when available (logX bins keep min/max in log₁₀ space)
                     const displayMin = bin.rawMin ?? bin.min;
                     const displayMax = bin.rawMax ?? bin.max;
                     return `${Number(displayMin.toFixed(precision))}-${Number(displayMax.toFixed(precision))}`;
@@ -211,10 +215,12 @@ const drawXAxis = (g, xScale, xAxisY, xAxisLabelOffset, xAxisLabel, graphType, d
         const isTimeScale = domain.length > 0 && domain[0] instanceof Date;
 
         if (isTimeScale) {
-            // Let D3 handle time formatting or use a smart format
-            // axisGenerator.tickFormat(d3.timeFormat("%b %Y")); 
-            // Default D3 time format is usually good, but we can enforce if needed based on range duration.
-            // For now, removing the formatNumber override is sufficient.
+            const [domainMin, domainMax] = domain;
+            const rangeYears = (domainMax - domainMin) / (1000 * 60 * 60 * 24 * 365);
+            if (rangeYears <= 10) {
+                axisGenerator.tickFormat(d3.timeFormat("%Y/%m"));
+            }
+            // For ranges > 10 years let D3 auto-format (shows just the year, horizontal)
         } else {
             // Numeric X-Axis (Scatter, Line, etc.)
             if (staticXScale) {
@@ -268,24 +274,20 @@ const drawXAxis = (g, xScale, xAxisY, xAxisLabelOffset, xAxisLabel, graphType, d
             .attr('dx', '-.8em')
             .attr('dy', '.15em')
             .attr('transform', 'rotate(-45)');
-    } else if (graphType === 'histogram' && histogramBinCount > 1) {
-        // Range labels like "10.2-15.6" are always long — rotate whenever there's more than one bin
-        xAxis.selectAll('text')
-            .style('text-anchor', 'end')
-            .attr('dx', '-.8em')
-            .attr('dy', '.15em')
-            .attr('transform', 'rotate(-45)');
     } else {
-        // Check for Time Scale rotation
+        // Rotate time scale labels only for short ranges where %Y/%m labels are used
         const domain = xScale.domain();
         const isTimeScale = domain.length > 0 && domain.some(d => d instanceof Date);
 
         if (isTimeScale) {
-            xAxis.selectAll('text')
-                .style('text-anchor', 'end')
-                .attr('dx', '-.8em')
-                .attr('dy', '.15em')
-                .attr('transform', 'rotate(-45)');
+            const rangeYears = (domain[domain.length - 1] - domain[0]) / (1000 * 60 * 60 * 24 * 365);
+            if (rangeYears <= 10) {
+                xAxis.selectAll('text')
+                    .style('text-anchor', 'end')
+                    .attr('dx', '-.8em')
+                    .attr('dy', '.15em')
+                    .attr('transform', 'rotate(-45)');
+            }
         }
     }
 
@@ -449,7 +451,12 @@ export const drawAxes = (
         const yDomain = primaryYScale.domain();
 
         if (xDomain[0] <= 0 && xDomain[1] >= 0) {
-            yAxisX = Math.max(0, Math.min(width, xScale(0)));
+            // For histograms with a centered-bin domain (e.g. [-0.5, 20.5]),
+            // xScale(0) lands slightly right of the left edge. Pin to pixel 0
+            // so the y-axis always sits flush against the left margin.
+            const isHistogram = config.graphType === 'histogram' ||
+                config.series?.some(s => s.graphType === 'histogram');
+            yAxisX = isHistogram ? 0 : Math.max(0, Math.min(width, xScale(0)));
         }
         if (yDomain[0] <= 0 && yDomain[1] >= 0) {
             xAxisY = Math.max(0, Math.min(height, primaryYScale(0)));
