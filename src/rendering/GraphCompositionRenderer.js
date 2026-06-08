@@ -32,6 +32,7 @@
 
 import * as d3 from 'd3';
 import { generateContours } from '../utils/graphUtils.js';
+import { parseColumnId } from '../utils/columnUtils.js';
 import { parseNumber } from '../utils/dataUtils.js';
 import { ChartRendererFactory } from './ChartRenderers/ChartRendererFactory.js';
 import { debugLog, debugWarn } from '../utils/debug.js';
@@ -63,6 +64,10 @@ export class GraphCompositionRenderer {
             const scales = { xScale, yScale: isDualAxis ? yScale.primary : yScale };
             const renderer = ChartRendererFactory.createRendererSafe('histogram');
             renderer.render(g, validData, scales, xAxisInfo, null, graphConfig, colorScale, colorInfo, seriesColorScale);
+            // Stacked histograms need a group-color legend; normal histograms skip this
+            if (graphConfig.stackBy) {
+                this.renderStackedHistogramLegend(g, validData, graphConfig, xScale);
+            }
             return;
         }
 
@@ -632,4 +637,90 @@ export class GraphCompositionRenderer {
             debugWarn('Failed to render curve fit legend', e);
         }
     }
+
+        /**
+     * Render a color legend for stacked histograms, positioned top-right of the plot area.
+     *
+     * Groups are listed in the same alphabetical order used by generateStackedBins so the
+     * colors here always match the bar segments. The palette mirrors HistogramRenderer.STACKED_PALETTE.
+     *
+     * @param {d3.Selection} g       - D3 group selection (chart coordinate space, after margins)
+     * @param {Array}        data    - Full row-object data (used to discover group names)
+     * @param {Object}       config  - Graph config (reads stackBy and optional stackColors overrides)
+     * @param {d3.Scale}     xScale  - X-axis scale (used to right-align the legend box)
+     */
+    renderStackedHistogramLegend(g, data, config, xScale) {
+        // Must mirror HistogramRenderer.STACKED_PALETTE exactly so bar colors = legend colors
+        const PALETTE = ['#f59e0b', '#ef4444', '#0ea5e9', '#9ca3af'];
+
+        // Parse "commodity_group::file.csv" → "commodity_group"
+        const stackByColumn = parseColumnId(config.stackBy)?.columnName
+            ?? config.stackBy.split('::')[0];
+
+        // Discover group names in alphabetical order (same sort used by generateStackedBins)
+        const groupSet = new Set();
+        for (const row of data) {
+            const grp = row[stackByColumn];
+            if (grp != null && grp !== '') groupSet.add(String(grp));
+        }
+        const groupNames = [...groupSet].sort();
+        if (groupNames.length === 0) return;
+
+        const entries = groupNames.map((name, i) => ({
+            name,
+            // Per-group color override from config, otherwise fall back to palette
+            color: config.stackColors?.[name] ?? PALETTE[i % PALETTE.length],
+        }));
+
+        // Layout constants
+        const swatchSize   = 12;
+        const textGap      = 6;
+        const rowHeight    = swatchSize + 6;
+        const padX         = 10;
+        const padY         = 8;
+        const headerHeight = 20;
+        const approxCharW  = 7; // px per character at 11px sans-serif
+        const maxLabelLen  = Math.max(...groupNames.map(n => n.length));
+        const boxW         = padX * 2 + swatchSize + textGap + maxLabelLen * approxCharW;
+        const boxH         = padY * 2 + headerHeight + entries.length * rowHeight;
+
+        // Top-right of the plot area
+        const plotWidth = xScale.range()[1];
+        const legendX   = plotWidth - boxW - 12;
+        const legendY   = 12;
+
+        const legendGroup = g.append('g')
+            .attr('class', 'stacked-histogram-legend')
+            .attr('transform', `translate(${legendX}, ${legendY})`);
+
+        // Background box
+        legendGroup.append('rect')
+            .attr('width', boxW).attr('height', boxH)
+            .attr('rx', 6).attr('ry', 6)
+            .attr('fill', '#ffffff').attr('fill-opacity', 0.92)
+            .attr('stroke', '#e2e8f0').attr('stroke-width', 1);
+
+        // Header text
+        legendGroup.append('text')
+            .attr('x', padX).attr('y', padY + 13)
+            .attr('font-weight', 600).attr('font-size', 12)
+            .attr('font-family', 'Inter, sans-serif').attr('fill', '#374151')
+            .text('Commodity Group');
+
+        // One swatch + label row per group
+        entries.forEach((entry, i) => {
+            const rowY = padY + headerHeight + i * rowHeight;
+            const row  = legendGroup.append('g').attr('transform', `translate(${padX}, ${rowY})`);
+
+            row.append('rect')
+                .attr('width', swatchSize).attr('height', swatchSize)
+                .attr('rx', 2).attr('fill', entry.color).attr('opacity', 0.85);
+
+            row.append('text')
+                .attr('x', swatchSize + textGap).attr('y', swatchSize - 1)
+                .attr('font-size', 11).attr('font-family', 'Inter, sans-serif')
+                .attr('fill', '#374151').text(entry.name);
+        });
+    }
+
 }
