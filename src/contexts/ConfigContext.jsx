@@ -128,6 +128,11 @@ export const ConfigProvider = ({ children }) => {
         setCurveFits(prev => prev.slice(0, -1));
     }, []);
 
+    const loadCurveFits = useCallback((fits) => {
+        if (!Array.isArray(fits) || fits.length === 0) return;
+        setCurveFits(fits);
+    }, []);
+
     const updateGlobalSettings = useCallback((updates) => {
         if (!updates || typeof updates !== 'object') {
             debugWarn('Invalid updates provided to updateGlobalSettings');
@@ -170,12 +175,13 @@ export const ConfigProvider = ({ children }) => {
         updateCurveFit,
         addCurveFit,
         removeCurveFit,
+        loadCurveFits,
         updateGlobalSettings,
         resetConfig
     }), [graphConfig, curveFits, globalSettings,
         updateGraphConfig, addSeries, removeSeries,
         updateSeries, moveSeries, updateCurveFit,
-        addCurveFit, removeCurveFit, updateGlobalSettings, resetConfig
+        addCurveFit, removeCurveFit, loadCurveFits, updateGlobalSettings, resetConfig
     ]);
 
     return (
