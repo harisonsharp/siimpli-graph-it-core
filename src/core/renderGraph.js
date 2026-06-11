@@ -348,12 +348,16 @@ function renderLegends(svg, validData, scales, columnInfo, config, dimensions, s
         }
     }
 
-    if (graphType !== 'histogram' && seriesInfo.length > 1 && seriesColorScale) {
+    // A single series still warrants a legend when distinct color grading splits
+    // it into per-category rows; drawSeriesLegend itself skips lone unsplit series.
+    const hasDistinctGrading = (scales.seriesColorScales || []).some(g => g?.mode === 'distinct');
+    if (graphType !== 'histogram' && (seriesInfo.length > 1 || hasDistinctGrading) && seriesColorScale) {
         const hasSecondaryAxis = config.series && (config.series.some(s => s.axisAssignment === 'secondary') || config.dualUnits);
         const legendOffset = hasSecondaryAxis ? 140 : 60;
         LegendRenderer.drawSeriesLegend(
             config, svg, validData, seriesInfo, seriesColorScale,
-            settings.graphDimensions, margin, legendOffset
+            settings.graphDimensions, margin, legendOffset,
+            scales.seriesColorScales
         );
     }
 

@@ -95,6 +95,8 @@ export const DEFAULT_GRAPH_CONFIG = {
     },
     dualYAxis: false,
     yAxis2: '',
+    showUnifiedTable: false,
+    ignoreUnifiedValues: false
 };
 
 export const DEFAULT_CURVE_FIT = {

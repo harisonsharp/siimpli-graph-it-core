@@ -163,6 +163,31 @@ export class ScaleFactory {
     }
 
     /**
+     * Resolve the distinct color-grading categories for one series, or null when
+     * the series has no active distinct grading. Used by legend-style renderers
+     * (LegendRenderer, UnifiedTableRenderer) to expand a series into one entry
+     * per category.
+     *
+     * @param {{colorScale: Function, colorInfo: Object, mode: string}|null} grading -
+     *   Entry from createSeriesColorScales for this series
+     * @param {Array<Object>} validData - Filtered valid data rows
+     * @returns {{values: Array, colorScale: Function, columnName: string}|null}
+     */
+    static getDistinctGradingCategories(grading, validData) {
+        if (!grading || grading.mode !== 'distinct' || !grading.colorScale || !grading.colorInfo?.columnName) {
+            return null;
+        }
+        const columnName = grading.colorInfo.columnName;
+        const values = [...new Set(
+            validData
+                .map(d => d[columnName])
+                .filter(v => v !== undefined && v !== null && v !== '')
+        )];
+        if (values.length === 0) return null;
+        return { values, colorScale: grading.colorScale, columnName };
+    }
+
+    /**
      * Create ordinal color scale for series differentiation
      * @param {Array<string>} seriesNames - Array of series identifiers
      * @param {Array<Object>} seriesInfo - List of series configuration objects (optional)
