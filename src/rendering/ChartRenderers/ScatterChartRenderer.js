@@ -56,18 +56,22 @@ export class ScatterChartRenderer extends BaseChartRenderer {
      * @param {Object} yAxisInfo - Y-axis column info
      * @param {Object} config - Graph configuration
      * @param {d3.Scale} colorScale - Optional color scale
-     * @param {Object} colorInfo - Optional color column info
+     * @param {Object} colorInfo - Optional color column info. In the case where color grading is distinct, this object has the columnName and the fileName the grading is based on.
      * @param {string} seriesColor - Optional series color
      * @param {Object} seriesConfig - The specific series configuration object for this render call
      */
     render(g, data, scales, xAxisInfo, yAxisInfo, config, colorScale = null, colorInfo = null, seriesColor = null, seriesConfig = null) {
+        debugLog('ScatterChartRenderer.render - Start of Method', {
+            g, data, scales, xAxisInfo, yAxisInfo, config, colorScale, colorInfo, seriesColor, seriesConfig
+        });
+
         this.validateRenderParams(g, data, scales);
         const { xScale, yScale } = scales;
         let validData = this.filterValidData(data, xAxisInfo, yAxisInfo);
 
         if (validData.length === 0) {
             console.warn('No valid data points for scatter plot');
-            return;
+            return; 
         }
 
         // Use the directly-passed series config when available; fall back to a find() only for
@@ -130,10 +134,10 @@ export class ScatterChartRenderer extends BaseChartRenderer {
         // repeated property lookups. A single typed pass is faster and more cache-friendly.
         const isBatchMode = config._isBatchMode === true;
         const yColName = yAxisInfo.columnName;
-        const n = validData.length;
-        const transforms = new Array(n);
-        const fills = new Array(n);
-        const symbolPaths = new Array(n);
+        const validDataLen = validData.length;
+        const transforms = new Array(validDataLen);
+        const fills = new Array(validDataLen);
+        const symbolPaths = new Array(validDataLen);
 
         // Hoist d3.symbol generator — creating it once avoids N object allocations
         const symbolGen = d3.symbol().size(symbolArea);
@@ -144,10 +148,12 @@ export class ScatterChartRenderer extends BaseChartRenderer {
             ? null
             : this.getPointColor(validData[0], colorScale, colorInfo, config, seriesColor);
 
-        for (let i = 0; i < n; i++) {
+        for (let i = 0; i < validDataLen; i++) {
             const d = validData[i];
+            // Normalize so points with a missing filter value resolve to the shared
+            // MISSING_CATEGORY symbol (its own glyph) rather than the fallback circle.
             const symType = (symbolMap && filterColumn)
-                ? SymbolFactory.getSymbol(d[filterColumn], symbolMap)
+                ? SymbolFactory.getSymbol(SymbolFactory.normalizeCategory(d[filterColumn]), symbolMap)
                 : d3.symbolCircle;
             symbolPaths[i] = symbolGen.type(symType)();
             const rawY = parseNumber(d[yColName]);
@@ -190,7 +196,7 @@ export class ScatterChartRenderer extends BaseChartRenderer {
             });
 
        
-        console.log('Scatter chart rendered successfully', n);
+        console.log('Scatter chart rendered successfully', validDataLen);
     }
 
     /**

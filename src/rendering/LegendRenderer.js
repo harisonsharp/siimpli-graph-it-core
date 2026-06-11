@@ -280,94 +280,10 @@ export class LegendRenderer {
     }
 
     /**
-     * Builds the legend sub-items for a single series.
-     *
-     * A scatter series can vary along two orthogonal axes:
-     *  - symbol encoding (unique values of series.filterColumn → distinct symbols)
-     *  - distinct color grading (unique values of colorGrading column → distinct fills)
-     * When both are active we emit the cross-product, restricted to combinations
-     * that actually occur in the data (so 3 types × 3 colors yields *up to* 9 rows).
-     *
-     * @param {Object} series - Parsed series info entry
-     * @param {Array} validData - Filtered valid data rows
-     * @param {Function} colorScale - Series fallback color scale
-     * @param {Object|null} grading - Entry from seriesColorScales for this series
-     * @returns {Array<{label: string, shapeType: string, symbol?: Object, color: string}>}
-     */
-    static buildSeriesLegendItems(series, validData, colorScale, grading) {
-        const baseLabel = series.titleName || series.yAxisInfo.columnName;
-        const seriesColor = ScaleFactory.resolveColor(series.color) || colorScale(series.yAxisInfo.columnName);
-
-        // Symbol-encoding axis (existing symbolMap behavior)
-        let symbolValues = [];
-        let symbolMap = null;
-        const symbolColumn = series.filterColumn?.split('::')[0];
-        if (series.graphType === 'scatter' && SymbolFactory.shouldUseUniqueSymbolEncoding(series)) {
-            symbolValues = SymbolFactory.getUniqueValues(validData, symbolColumn);
-            if (series.excludeEmptyValues) {
-                symbolValues = symbolValues.filter(v => v !== undefined && v !== null && v !== '');
-            }
-            symbolMap = SymbolFactory.getSymbolMap(symbolValues);
-        }
-
-        // Distinct color-grading axis
-        const categories = series.graphType === 'scatter'
-            ? ScaleFactory.getDistinctGradingCategories(grading, validData)
-            : null;
-
-        const hasSymbols = symbolValues.length > 0;
-        const hasCategories = categories !== null;
-
-        if (!hasSymbols && !hasCategories) {
-            let label = baseLabel;
-            if (series.yAxisInfo.columnName === '__frequency__') label = 'Frequency';
-            return [{
-                label,
-                shapeType: series.graphType || 'scatter',
-                color: seriesColor
-            }];
-        }
-
-        // Cross-product of the active axes; a missing axis contributes [null].
-        const symAxis = hasSymbols ? symbolValues : [null];
-        const colorAxis = hasCategories ? categories.values : [null];
-
-        // Only emit combinations present in the data. Single pass over rows.
-        const presentCombos = new Set(validData.map(d => {
-            const symKey = hasSymbols ? String(d[symbolColumn]) : '';
-            const colKey = hasCategories ? String(d[categories.columnName]) : '';
-            return `${symKey} ${colKey}`;
-        }));
-
-        const items = [];
-        symAxis.forEach(symVal => {
-            colorAxis.forEach(colVal => {
-                const key = `${hasSymbols ? String(symVal) : ''} ${hasCategories ? String(colVal) : ''}`;
-                if (!presentCombos.has(key)) return;
-
-                const labelParts = [baseLabel];
-                if (symVal !== null) labelParts.push(String(symVal));
-                if (colVal !== null) labelParts.push(String(colVal));
-
-                items.push({
-                    label: labelParts.join(' - '),
-                    shapeType: 'symbol',
-                    symbol: symbolMap ? SymbolFactory.getSymbol(symVal, symbolMap) : null,
-                    color: hasCategories ? categories.colorScale(colVal) : seriesColor
-                });
-            });
-        });
-        return items;
-    }
-
-    /**
      * Draws the main series legend (lines, markers, etc).
-     *
-     * @param {Array} [seriesColorScales] - Per-series grading objects from
-     *   ScaleFactory.createSeriesColorScales: Array<{colorScale, colorInfo, mode}|null>.
-     *   When a series uses distinct grading, its legend rows are expanded per category.
      */
-    static drawSeriesLegend(graphConfig, svg, validData, seriesInfo, colorScale, graphDimensions, margin, xOffset = 90, seriesColorScales = null) {
+
+    static drawSeriesLegend(graphConfig, svg, validData, seriesInfo, colorScale, graphDimensions, margin, xOffset = 90) {
         // if (graphConfig.series.filter()
         const legend = svg.append("g")
             .attr("transform", `translate(${margin.left}, ${margin.top + graphDimensions.height - margin.bottom / 2})`);
@@ -381,24 +297,59 @@ export class LegendRenderer {
         if (graphConfig.barMode === 'stack-proportional' && seriesInfo.length > 1 && seriesInfo.some(s => s.graphType !== 'bar')) {
             stackProportionalLegend = true;
         }
-        const visibleSeriesCount = seriesInfo.filter(s => s.color !== 'white').length;
-
-        seriesInfo.forEach((series, i) => {
+        seriesInfo.forEach((series, _i) => {
             if (series.color==='white'){
                 return;
             }
-            const grading = seriesColorScales ? seriesColorScales[i] : null;
-            debugLog('[LegendRenderer.drawSeriesLegend] validData, series.filterColumn', validData, series.filterColumn);
-
-            const subItems = LegendRenderer.buildSeriesLegendItems(series, validData, colorScale, grading);
-            debugLog('[LegendRenderer.drawSeriesLegend] subItems', subItems);
-
-            // A lone series with no sub-grouping needs no legend; once it expands
-            // into multiple rows (symbol encoding and/or distinct grading), it does.
-            if (visibleSeriesCount <= 1 && subItems.length <= 1) {
+            if(seriesInfo.filter(s => s.color!=='white').length <= 1){
                 return;
             }
+            debugLog('[LegendRenderer.drawSeriesLegend] validData, series.filterColumn', validData, series.filterColumn);
+            let uniqueValues = [];
+            if (SymbolFactory.shouldUseUniqueSymbolEncoding(series)) {
+                uniqueValues = SymbolFactory.getUniqueValues(validData, series.filterColumn?.split('::')[0]);
+            }
+            debugLog('[LegendRenderer.drawSeriesLegend] uniqueValues', uniqueValues);
+            if (series.excludeEmptyValues) {
+                // getUniqueValues folds null/blank into MISSING_CATEGORY; drop that group.
+                uniqueValues = uniqueValues.filter(v => v !== SymbolFactory.MISSING_CATEGORY);
+            }
+            const symbolMap = SymbolFactory.getSymbolMap(uniqueValues);
+            debugLog('[LegendRenderer.drawSeriesLegend] uniqueValues, symbolMap', uniqueValues, symbolMap);
             const maxCharactersPerLine = CanvasSizer.DEFAULT_CONFIG.maxLineWidthLegend;
+
+            // Determine sub-items (unique values for categorical filter) or single item
+            // We expect series.uniqueValues and series.symbolMap if discrete mode is active
+            let subItems = [];
+
+            if (series.graphType === 'scatter' && uniqueValues && uniqueValues.length > 0) {
+                // Ensure we have a map. If not provided on series object, generate it on the fly (failsafe)
+
+
+                subItems = uniqueValues.map(val => {
+                    const isMissing = val === SymbolFactory.MISSING_CATEGORY;
+                    const displayVal = isMissing ? SymbolFactory.MISSING_LABEL : val;
+                    return {
+                        label: `${series.titleName} - ${displayVal}`, // Requirement: Series Name - Unique Value
+                        shapeType: 'symbol',
+                        symbol: SymbolFactory.getSymbol(val, symbolMap),
+                        // The (none) group uses the shared neutral color; graded groups keep the series color.
+                        color: isMissing
+                            ? SymbolFactory.MISSING_COLOR
+                            : (ScaleFactory.resolveColor(series.color) || colorScale(series.yAxisInfo.columnName))
+                    };
+                });
+            } else {
+                // Default single item
+                let label = series.titleName || series.yAxisInfo.columnName;
+                if (series.yAxisInfo.columnName === '__frequency__') label = 'Frequency';
+
+                subItems.push({
+                    label: label,
+                    shapeType: series.graphType || 'scatter',
+                    color: ScaleFactory.resolveColor(series.color) || colorScale(series.yAxisInfo.columnName)
+                });
+            }
 
             subItems.forEach((item) => {
                 // Calculate wrapping for THIS specific item

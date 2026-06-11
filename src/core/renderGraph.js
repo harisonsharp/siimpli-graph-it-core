@@ -37,11 +37,11 @@ function parseColumnInformation(config) {
                 yAxisInfo: parseColumnId(s.yAxis)
             }))
             .filter(s => s.yAxisInfo.columnName);
-
+    
     const colorInfo = parseColumnId(config.colorGrading);
     const contourInfo = graphType === 'histogram' ? null : parseColumnId(config.contouring);
 
-    return { xAxisInfo, xAxis2Info, seriesInfo, colorInfo, contourInfo, graphType };
+    return { xAxisInfo, xAxis2Info, seriesInfo, colorInfo, contourInfo, graphType};
 }
 
 /**
@@ -348,16 +348,12 @@ function renderLegends(svg, validData, scales, columnInfo, config, dimensions, s
         }
     }
 
-    // A single series still warrants a legend when distinct color grading splits
-    // it into per-category rows; drawSeriesLegend itself skips lone unsplit series.
-    const hasDistinctGrading = (scales.seriesColorScales || []).some(g => g?.mode === 'distinct');
-    if (graphType !== 'histogram' && (seriesInfo.length > 1 || hasDistinctGrading) && seriesColorScale) {
+    if (graphType !== 'histogram' && seriesInfo.length > 1 && seriesColorScale) {
         const hasSecondaryAxis = config.series && (config.series.some(s => s.axisAssignment === 'secondary') || config.dualUnits);
         const legendOffset = hasSecondaryAxis ? 140 : 60;
         LegendRenderer.drawSeriesLegend(
             config, svg, validData, seriesInfo, seriesColorScale,
-            settings.graphDimensions, margin, legendOffset,
-            scales.seriesColorScales
+            settings.graphDimensions, margin, legendOffset
         );
     }
 
@@ -390,6 +386,8 @@ function renderLegends(svg, validData, scales, columnInfo, config, dimensions, s
  * @param {boolean} [options.isBatchMode=false] - Whether rendering in headless batch mode
  * @returns {{success: boolean, error?: string, margin?: Object}} Result status
  */
+
+// TODO: columnInfo.seriesInfo has one difference from graphConfig.series: yAxisInfo. Find a solution s.t. we can simplify the data object, hopefully by just using graphConfig.
 export function renderGraph({
     svg: svgNode,
     csvData,

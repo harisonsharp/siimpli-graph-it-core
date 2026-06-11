@@ -7,12 +7,9 @@
  * and the Y-value at the currently selected — or most recent — X position. When `dualUnits`
  * is enabled a second converted-value column is appended to the right.
  *
- * Categorical scatter series are expanded into sub-rows along two orthogonal axes:
- * per-category symbol encoding (`filterColumn` → distinct D3 symbols) and distinct color
- * grading (`colorGrading.mode === 'distinct'` → distinct fills from the same scale the
- * plotted points use). When both are active the table shows the cross-product of the two,
- * restricted to combinations present in the data; each sub-row runs an independent value
- * lookup scoped to its filtered subset.
+ * Categorical scatter series (those using a `filterColumn` for per-category symbol encoding)
+ * are expanded into one sub-row per unique category value, each with its own D3 symbol and its
+ * own independent value lookup scoped to the filtered data for that category.
  *
  * @author Harison Sharp
  * @since 0.4.0
@@ -31,7 +28,8 @@ import { ScaleFactory } from './ScaleFactory.js';
 import { SymbolFactory } from '../utils/SymbolFactory.js';
 import { debugLog } from '../utils/debug.js';
 import { CanvasSizer } from '../services/CanvasSizer.js';
-
+import { parseColumnId} from '../utils/columnUtils.js';
+import { getDistinctSeriesColors } from '../utils/colorUtils.js';
 /**
  * Renders a unified table combining legend markers, series names, and values.
  * This provides a single cohesive table instead of separate legend and data table.
@@ -53,6 +51,53 @@ import { CanvasSizer } from '../services/CanvasSizer.js';
  * ```
  */
 export class UnifiedTableRenderer {
+    /**
+     * Shared layout constants. Kept in one place so font-size, character-width estimate,
+     * and column padding stay consistent between width-fitting and text truncation.
+     */
+    static LAYOUT = {
+        /** Body text size, in px. Header labels use a smaller size set inline. */
+        fontSizePx: 9,
+        /**
+         * Approximate rendered width of one character at {@link LAYOUT.fontSizePx} in the
+         * sans-serif body font. Used by {@link UnifiedTableRenderer.fitToContent} to convert
+         * character counts into pixel widths without measuring the DOM. ~0.6em is a good
+         * average for proportional sans-serif.
+         */
+        charPx: 5,
+        /** Horizontal breathing room added to every content-fitted column, in px. */
+        columnPaddingPx: 12,
+    };
+
+    /**
+     * Builds a content-fitted column width: the longest displayed string across the given rows,
+     * in characters, converted to pixels and padded. Use this as a column's `width` (in place of
+     * a fixed number) to make the column grow to fit its content.
+     *
+     * The result is clamped to `[min, max]` so a single very long value can't blow out the table
+     * and an empty column still reserves a sensible minimum.
+     *
+     * @param {Array<Object>} rows - The row descriptors to measure (only `type === 'series'` rows count).
+     * @param {(row: Object) => (string|number|null|undefined)} accessor - Extracts the cell text from a row.
+     * @param {Object} [opts]
+     * @param {number} [opts.min=40] - Minimum width in px.
+     * @param {number} [opts.max=240] - Maximum width in px (longer text is truncated when rendered).
+     * @param {string} [opts.header] - Optional header label to also factor into the width.
+     * @returns {number} The resolved pixel width.
+     */
+    static fitToContent(rows, accessor, { min = 40, max = 240, header = '' } = {}) {
+        const { charPx, columnPaddingPx } = UnifiedTableRenderer.LAYOUT;
+        let longest = header ? header.length : 0;
+        for (const row of rows) {
+            if (row.type !== 'series') continue;
+            const raw = accessor(row);
+            const len = (raw === null || raw === undefined) ? 0 : String(raw).length;
+            if (len > longest) longest = len;
+        }
+        const px = longest * charPx + columnPaddingPx;
+        return Math.max(min, Math.min(max, px));
+    }
+
     /**
      * Main entry point — draws the unified legend+value table onto the SVG.
      *
@@ -158,13 +203,10 @@ export class UnifiedTableRenderer {
      * the series — showing the last known reading is more useful than showing a gap.
      *
      * **Categorical scatter expansion:**
-     * A scatter series is expanded into sub-rows along two orthogonal axes:
-     * - symbol encoding: `filterColumn` + `SymbolFactory.shouldUseUniqueSymbolEncoding` →
-     *   one symbol per unique filter value;
-     * - distinct color grading: `scales.seriesColorScales[i]` with `mode === 'distinct'` →
-     *   one fill color per unique grading-column value.
-     * With both active, one sub-row is emitted per (symbol × color) combination present in
-     * the data, each running an independent value lookup against its filtered subset.
+     * When a series has a `filterColumn` and `SymbolFactory.shouldUseUniqueSymbolEncoding`
+     * returns `true`, the series is expanded into one sub-row per unique category value. Each
+     * sub-row gets its own D3 symbol and runs an independent value lookup against the subset of
+     * rows filtered to that category.
      *
      * **Row types returned:**
      * - `'header'` — always index 0; carries the X-axis label and formatted X value.
@@ -196,6 +238,10 @@ export class UnifiedTableRenderer {
         // Sorting is required for D3's bisector to produce correct insertion indices.
         const sortedData = [...validData].sort((a, b) => +a[xCol] - +b[xCol]);
 
+        // `bisector(...).left` returns the index at which `targetX` would be inserted to
+        // maintain sorted order, i.e. the first element with value >= targetX.
+        const bisectDate = d3.bisector(d => +d[xCol]).left;
+
         // Fall back to the last data point when no hover/selection is active.
         let targetX = selectedXValue;
         if (targetX === null || targetX === undefined) {
@@ -218,52 +264,99 @@ export class UnifiedTableRenderer {
             value: targetX,
             color: '#333'
         });
-
+        
         // Series rows
-        seriesInfo.forEach((series, index) => {
-            const yCol = series.yAxisInfo.columnName;
-
-            // Prefer an explicit series colour; fall back to the ordinal colour scale.
-            const seriesColor = ScaleFactory.resolveColor(series.color) ||
-                (seriesColorScale ? seriesColorScale(yCol) : '#333');
-
-            // ── Sub-group axes ─────────────────────────────────────────────────────
-            // A scatter series can vary along two orthogonal axes, each expanding the
-            // series into sub-rows:
-            //   1. Symbol encoding — unique values of `filterColumn` → distinct symbols.
-            //   2. Distinct color grading — unique values of the colorGrading column →
-            //      distinct fills (same scale the scatter points use).
-            // When both are active we emit the cross-product, restricted to
-            // combinations actually present in the data (3 types × 3 colors → up to 9 rows).
-
+        graphConfig.series.forEach((series, index) => {
+            const columnFileObject = parseColumnId(series.yAxis);
+            const yCol = columnFileObject.columnName;
+            
+            // Prefer color scale, fall back to single color
+            const seriesColor = seriesColorScale 
+                                ? seriesColorScale(yCol) 
+                                : ScaleFactory.resolveColor(series.color);
+            
+            // Determine whether this series uses per-category symbol encoding.
             // `filterColumn` may carry axis-assignment metadata after '::' — strip that suffix.
-            const filterColumn = series.filterColumn?.split('::')[0];
+            const filterColumnFileObject = parseColumnId(series.filterColumn);
+            const filterColumn = filterColumnFileObject.columnName;            
             let uniqueValues = [];
-            if (series.graphType === 'scatter' && filterColumn && SymbolFactory.shouldUseUniqueSymbolEncoding(series)) {
+            if (filterColumn && SymbolFactory.shouldUseUniqueSymbolEncoding(series)) {
                 uniqueValues = SymbolFactory.getUniqueValues(validData, filterColumn);
             }
 
-            // Optionally remove rows where the category value is blank or null.
+            // Optionally remove the missing-value group (getUniqueValues now folds
+            // null/blank into the MISSING_CATEGORY sentinel rather than dropping them).
             if (series.excludeEmptyValues) {
-                uniqueValues = uniqueValues.filter(v => v !== undefined && v !== null && v !== '');
+                uniqueValues = uniqueValues.filter(v => v !== SymbolFactory.MISSING_CATEGORY);
             }
 
             // Build the category → D3-symbol mapping once, shared across all sub-rows.
             const symbolMap = uniqueValues.length > 0 ? SymbolFactory.getSymbolMap(uniqueValues) : null;
+            
+            const colorGrading = series.colorGrading?.enabled ? series.colorGrading : null;
+            const isDistinctColor = colorGrading && colorGrading.mode === 'distinct';
 
-            // Distinct color-grading categories (null unless this series has
-            // colorGrading.mode === 'distinct' active).
-            const grading = scales.seriesColorScales ? scales.seriesColorScales[index] : null;
-            const categories = series.graphType === 'scatter'
-                ? ScaleFactory.getDistinctGradingCategories(grading, validData)
-                : null;
+            if (series.graphType === 'scatter' && isDistinctColor) {
+                // ── Categorical scatter with distinct colour grading ──────────────────
+                // Expand into the (symbol × distinct-colour) cross-product. Each combination
+                // is an independent mini-series: data is scoped to rows matching BOTH the
+                // symbol category and the colour category, then the backward-scan lookup runs
+                // on that subset for the per-combination most-recent value.
+                const colorColumnFileObject = parseColumnId(colorGrading.column);
+                const colorColumn = colorColumnFileObject.columnName;
 
-            const hasSymbols = symbolMap !== null;
-            const hasCategories = categories !== null;
+                const distinctRows = getDistinctSeriesColors(series, validData, symbolMap);
+                distinctRows.forEach(({ symbolValue, symbolType, colorValue, color }) => {
+                    // Match via normalized categories so the (none) sentinel lines up with
+                    // the actual null/blank rows in the data.
+                    const filteredData = sortedData.filter(d =>
+                        (symbolValue === null ||
+                            SymbolFactory.normalizeCategory(d[filterColumn]) === symbolValue) &&
+                        (colorValue === null || !colorColumn ||
+                            SymbolFactory.normalizeCategory(d[colorColumn]) === colorValue)
+                    );
+                    rows.push(this._newFunction(
+                        targetX, filteredData, xCol, yCol, series,
+                        this._categoryLabel(symbolValue), this._categoryLabel(colorValue), color, symbolType
+                    ));
+                });
+            } else if (series.graphType === 'scatter' && uniqueValues.length > 0 && symbolMap) {
+                // ── Categorical scatter: one sub-row per unique filter value ──────────
+                // Each category is treated as an independent mini-series: data is filtered
+                // to only rows matching that category, then the backward-scan lookup is
+                // applied to the filtered subset to get the per-category most-recent value.
+                uniqueValues.forEach(uniqueVal => {
+                    const filteredData = sortedData.filter(d =>
+                        SymbolFactory.normalizeCategory(d[filterColumn]) === uniqueVal);
+                    rows.push(this._newFunction(
+                        targetX, filteredData, xCol, yCol, series,
+                        this._categoryLabel(uniqueVal), null, seriesColor,
+                        SymbolFactory.getSymbol(uniqueVal, symbolMap)
+                    ));
+                });
+            } else {
+                // ── Standard series: single row, full-dataset value lookup ────────────
+                let foundVal = null;
 
-            if (!hasSymbols && !hasCategories) {
-                // ── Standard series: single row, full-dataset value lookup ─────────
-                const foundVal = this._findValueAtX(sortedData, xCol, yCol, targetX);
+                if (targetX !== null && targetX !== undefined) {
+                    const i = bisectDate(sortedData, targetX, 1);
+                    let scanIdx = Math.min(i, sortedData.length - 1);
+
+                    // Step back if the bisector overshot targetX.
+                    while (scanIdx >= 0 && +sortedData[scanIdx][xCol] > targetX) {
+                        scanIdx--;
+                    }
+
+                    // Walk backwards to find the most-recent non-null Y value.
+                    for (let k = scanIdx; k >= 0; k--) {
+                        const d = sortedData[k];
+                        if (d[yCol] !== undefined && d[yCol] !== null && !isNaN(+d[yCol])) {
+                            foundVal = d[yCol];
+                            break;
+                        }
+                    }
+                }
+
                 rows.push({
                     type: 'series',
                     label: series.titleName || yCol,
@@ -275,84 +368,107 @@ export class UnifiedTableRenderer {
                     // Non-scatter types don't need a symbol; use circle as the scatter default.
                     symbolType: series.graphType === 'scatter' ? d3.symbolCircle : null
                 });
-                return;
             }
-
-            // ── Sub-grouped scatter: one row per present (symbol × color) combination ──
-            // Each combination is an independent mini-series: data is filtered to the
-            // matching rows, then the backward-scan lookup runs on that subset.
-            const symAxis = hasSymbols ? uniqueValues : [null];
-            const colorAxis = hasCategories ? categories.values : [null];
-
-            symAxis.forEach(symVal => {
-                colorAxis.forEach(colVal => {
-                    const filteredData = sortedData.filter(d =>
-                        (symVal === null || d[filterColumn] === symVal) &&
-                        (colVal === null || d[categories.columnName] === colVal)
-                    );
-                    // Skip combinations that never occur in the data.
-                    if (filteredData.length === 0) return;
-
-                    const foundVal = this._findValueAtX(filteredData, xCol, yCol, targetX);
-
-                    const labelParts = [series.titleName || yCol];
-                    if (symVal !== null) labelParts.push(String(symVal));
-                    if (colVal !== null) labelParts.push(String(colVal));
-
-                    rows.push({
-                        type: 'series',
-                        label: labelParts.join(' - '),
-                        value: foundVal !== null ? foundVal : 'N/A',
-                        color: colVal !== null ? categories.colorScale(colVal) : seriesColor,
-                        graphType: 'scatter',
-                        lineStyle: series.lineStyle || 'solid',
-                        strokeWidth: series.strokeWidth || 2,
-                        symbolType: symbolMap ? SymbolFactory.getSymbol(symVal, symbolMap) : d3.symbolCircle
-                    });
-                });
-            });
         });
 
         return rows;
     }
 
     /**
-     * Finds the most-recent non-null Y value at or before `targetX` in a sorted dataset.
-     *
-     * A D3 bisector locates the insertion point for `targetX`, the scan steps back past
-     * any overshoot, then walks backwards skipping `null`/`undefined`/`NaN` entries.
-     * This "most-recent non-null" strategy handles sparse scientific datasets where
-     * instruments may stop reporting without closing the series.
+     * Builds a single expanded scatter sub-row: scopes the value lookup to `filteredData`
+     * (already filtered to this symbol/colour combination by the caller) and assembles the
+     * renderable row descriptor.
      *
      * @private
-     * @param {Array<Object>} sortedRows - Rows sorted ascending by the X column.
-     * @param {string} xCol - X column name.
-     * @param {string} yCol - Y column name.
-     * @param {number|Date|null} targetX - Target X position.
-     * @returns {*|null} The found Y value, or null when none qualifies.
+     * @param {number|Date|null} targetX - Target X for the most-recent-value lookup.
+     * @param {Array<Object>} filteredData - Sorted data scoped to this symbol×colour combination.
+     * @param {string} xCol - X-axis column name.
+     * @param {string} yCol - Y-axis column name.
+     * @param {Object} series - Owning series config (for label, lineStyle, strokeWidth).
+     * @param {string|number|null} symbolValue - The filter/symbol category value (label suffix).
+     * @param {string|number|null} colorValue - The distinct-colour category value (label suffix), or null.
+     * @param {string} color - Pre-resolved colour for this row.
+     * @param {Object} symbolType - Pre-resolved D3 symbol type for this row.
+     * @returns {Object} A `'series'` row descriptor for `_drawTableContent`.
      */
-    static _findValueAtX(sortedRows, xCol, yCol, targetX) {
-        if (targetX === null || targetX === undefined || sortedRows.length === 0) {
-            return null;
-        }
+    /**
+     * Maps a raw category value to its display label, rendering the shared missing-category
+     * sentinel as the human-readable `(none)`. Returns `null`/`undefined` unchanged so callers
+     * can still suppress absent dimensions.
+     * @private
+     * @param {string|number|null|undefined} value
+     * @returns {string|number|null|undefined}
+     */
+    static _categoryLabel(value) {
+        return value === SymbolFactory.MISSING_CATEGORY ? SymbolFactory.MISSING_LABEL : value;
+    }
 
-        const bisect = d3.bisector(d => +d[xCol]).left;
-        const i = bisect(sortedRows, targetX, 1);
-        let scanIdx = Math.min(i, sortedRows.length - 1);
-
-        // The bisector may land one position past targetX — step back if so.
-        while (scanIdx >= 0 && +sortedRows[scanIdx][xCol] > targetX) {
-            scanIdx--;
-        }
-
-        // Walk backwards to find the most-recent non-null Y.
-        for (let k = scanIdx; k >= 0; k--) {
-            const d = sortedRows[k];
-            if (d[yCol] !== undefined && d[yCol] !== null && !isNaN(+d[yCol])) {
-                return d[yCol];
+    /**
+     * Resolves the display name for a category column header from the first series that defines it.
+     * For the symbol dimension pass `'filterColumn'`; for the colour dimension pass `'colorGrading'`
+     * (its `.column` sub-field is read). Returns `null` when no series defines that dimension.
+     *
+     * @private
+     * @param {Object} graphConfig - Graph configuration with a `series` array.
+     * @param {'filterColumn'|'colorGrading'} kind - Which dimension's column name to resolve.
+     * @returns {string|null} The bare column name (file suffix stripped), or null.
+     */
+    static _firstColumnName(graphConfig, kind) {
+        for (const series of (graphConfig.series || [])) {
+            const raw = kind === 'colorGrading'
+                ? (series.colorGrading?.enabled ? series.colorGrading.column : null)
+                : series.filterColumn;
+            if (raw) {
+                const name = parseColumnId(raw).columnName;
+                if (name) return name;
             }
         }
         return null;
+    }
+
+    static _newFunction(targetX, filteredData, xCol, yCol, series, symbolValue, colorValue, color, symbolType) {
+            debugLog('UnifiedTableRenderer.newFunction - Start of method', {
+                targetX, filteredData, xCol, yCol, series, symbolValue, colorValue, color, symbolType
+            });
+
+            let foundVal = null;
+            if (targetX !== null && targetX !== undefined && filteredData.length > 0) {
+                // A fresh bisector scoped to the filtered subset.
+                const filteredBisect = d3.bisector(d => +d[xCol]).left;
+                const i = filteredBisect(filteredData, targetX, 1);
+                let scanIdx = Math.min(i, filteredData.length - 1);
+
+                // The bisector may land one position past targetX — step back if so.
+                while (scanIdx >= 0 && +filteredData[scanIdx][xCol] > targetX) {
+                    scanIdx--;
+                }
+
+                // Walk backwards to find the most-recent non-null Y for this category.
+                for (let k = scanIdx; k >= 0; k--) {
+                    const d = filteredData[k];
+                    if (d[yCol] !== undefined && d[yCol] !== null && !isNaN(+d[yCol])) {
+                        foundVal = d[yCol];
+                        break;
+                    }
+                }
+            }
+
+        // The series name stays in its own column; the symbol/colour categories are surfaced
+        // in dedicated Filter/Color columns by _drawTableContent.
+        const toText = v => (v === null || v === undefined || v === '') ? '' : String(v);
+
+        return {
+            type: 'series',
+            label: series.titleName || yCol,
+            filterLabel: toText(symbolValue),
+            colorLabel: toText(colorValue),
+            value: foundVal !== null ? foundVal : 'N/A',
+            color,
+            graphType: 'scatter',
+            lineStyle: series.lineStyle || 'solid',
+            strokeWidth: series.strokeWidth || 2,
+            symbolType: symbolType || d3.symbolCircle
+        };
     }
 
     /**
@@ -421,12 +537,15 @@ export class UnifiedTableRenderer {
     /**
      * Renders all visual elements of the table into the provided SVG group.
      *
-     * **Fixed-width column layout (pixel-based):**
+     * **Column layout (pixel-based, built from a declarative column model):**
      * ```
      * x=10
-     *  │← 25px →│←────── 160px ──────→│← 90px →│[← 90px →]
-     *  │ Marker  │ Series name          │ Value   │[Converted]
+     *  │←25px→│←─ 160px ─→│[← 90px →]│[← 90px →]│← 90px →│[← 90px →]
+     *  │Marker│ Series     │[Filter] │[Color]   │ Value   │[Converted]
      * ```
+     * The Filter (symbol) and Color columns are present only when some row carries that
+     * dimension; the Value/Converted columns only when values are shown. X-positions are
+     * accumulated once from the visible columns so absent columns close up the gap.
      * The background `<rect>` is appended *first* so it sits behind all text, but it is
      * sized *last* — after all rows have been drawn and `currentY` is final. D3 selections
      * are live references, so mutating `bg` after appending updates the already-existing DOM element.
@@ -471,19 +590,61 @@ export class UnifiedTableRenderer {
         
         
 
-        // ── Column width constants ────────────────────────────────────────────────────
-        // These are fixed pixel widths. A future enhancement could measure rendered text
-        // and derive `nameColWidth` dynamically to avoid label overflow.
-        const markerColWidth = 25;
-        const nameColWidth = 160;
-        // values only shown if not ignored
-        const valueColWidth = graphConfig.ignoreUnifiedValues ? 0 : 90;
-        let secondValueColWidth = 0;
-        if (graphConfig.dualUnits && !graphConfig.ignoreUnifiedValues) {
-            secondValueColWidth = 90;
+        // ── Column model ──────────────────────────────────────────────────────────────
+        // Columns are described declaratively, then x-positions are accumulated once.
+        // Everything downstream references colX(key) / colW(key) instead of hand-summing
+        // offsets, so adding/removing columns can't drift the layout.
+        //
+        // A column's `width` may be either:
+        //   • a number               → fixed pixel width, or
+        //   • (rows) => number       → computed width; use `fitToContent(...)` to size the
+        //                              column to its longest entry (+ padding, clamped).
+        const showValues = !graphConfig.ignoreUnifiedValues;
+
+        // The Filter (symbol) and Color columns appear only when at least one data row actually
+        // carries that dimension — ordinary series shouldn't show two empty columns.
+        const hasFilterCol = rowData.some(r => r.type === 'series' && r.filterLabel);
+        const hasColorCol = rowData.some(r => r.type === 'series' && r.colorLabel);
+
+        // Header text for the two category columns: the underlying column names from the first
+        // series that defines them, falling back to generic labels.
+        const filterHeader = this._firstColumnName(graphConfig, 'filterColumn') || 'Filter';
+        const colorHeader = this._firstColumnName(graphConfig, 'colorGrading') || 'Color';
+
+        const fit = (accessor, opts) => rows => this.fitToContent(rows, accessor, opts);
+
+        const columns = [
+            { key: 'marker', width: 25, show: true },
+            // Auto-fit the text columns to their content (header included), clamped so a long
+            // value can't blow out the table. Swap any of these back to a fixed number if a
+            // stable column width is preferred.
+            { key: 'name',   width: fit(r => r.label,       { min: 80, max: 220, header: 'Series' }),     show: true },
+            { key: 'filter', width: fit(r => r.filterLabel, { min: 60, max: 200, header: filterHeader }), show: hasFilterCol },
+            { key: 'color',  width: fit(r => r.colorLabel,  { min: 60, max: 200, header: colorHeader }),  show: hasColorCol },
+            { key: 'value',  width: 90, show: showValues },
+            { key: 'value2', width: 90, show: showValues && !!graphConfig.dualUnits },
+        ].filter(c => c.show);
+
+        // Accumulate left edges (inside the 10 px left padding), resolving each width spec.
+        const colMeta = {};
+        let acc = 10;
+        for (const c of columns) {
+            const width = typeof c.width === 'function' ? c.width(rowData) : c.width;
+            colMeta[c.key] = { x: acc, width };
+            acc += width;
         }
-        // +20 accounts for 10 px of internal padding on each horizontal side.
-        const totalWidth = markerColWidth + nameColWidth + valueColWidth + secondValueColWidth + 20;
+        const colX = key => (colMeta[key]?.x ?? acc);
+        const colW = key => (colMeta[key]?.width ?? 0);
+
+        // Max characters that fit in a column's text area, derived from its resolved pixel width
+        // so truncation always matches the actual column (no hand-tuned magic numbers).
+        const colChars = key => Math.max(
+            1,
+            Math.floor((colW(key) - UnifiedTableRenderer.LAYOUT.columnPaddingPx) / UnifiedTableRenderer.LAYOUT.charPx)
+        );
+
+        // +10 trailing padding to mirror the 10 px leading padding.
+        const totalWidth = acc + 10;
 
         // ── Background rect ───────────────────────────────────────────────────────────
         // Appended first so it renders behind all text, but sized at the end once the
@@ -518,62 +679,39 @@ export class UnifiedTableRenderer {
         // ── Column header row ─────────────────────────────────────────────────────────
         const headerY = currentY + 10;
 
-        // Marker column - no text needed for header
-        group.append('text')
-            .attr('x', 10)
+        // Small helper for the 8px grey column-header labels. `truncate` is on for content-fitted
+        // columns (so a long column name can't overflow its clamped width); the value columns
+        // are fixed-width with intentionally short headers, so they opt out.
+        const headerText = (key, txt, truncate = true) => group.append('text')
+            .attr('x', colX(key))
             .attr('y', headerY)
             .style('font-family', 'sans-serif')
             .style('font-size', '8px')
             .style('fill', '#999')
-            .text('');
+            .text(truncate ? this._truncateText(txt, colChars(key)) : txt);
 
-        group.append('text')
-            .attr('x', 10 + markerColWidth)
-            .attr('y', headerY)
-            .style('font-family', 'sans-serif')
-            .style('font-size', '8px')
-            .style('fill', '#999')
-            .text('Series');
+        // Marker column header is intentionally blank.
+        headerText('name', 'Series');
+        if (hasFilterCol) headerText('filter', filterHeader);
+        if (hasColorCol)  headerText('color', colorHeader);
 
-        
-
-        if (!graphConfig.ignoreUnifiedValues){
+        if (showValues){
             // Extract parenthesised units from the Y-axis label, e.g. "Gold Price (USD/oz)" → "USD/oz".
-            const isLabelUnits = graphConfig.yAxisLabel.match(/\((.*?)\)/) 
-                ? true 
+            const isLabelUnits = graphConfig.yAxisLabel.match(/\((.*?)\)/)
+                ? true
                 : false;
-            const labelUnits = graphConfig.dualUnits 
-                ? `, ${graphConfig.fromUnits}` 
-                : isLabelUnits 
-                    ? `, ${graphConfig.yAxisLabel.match(/\((.*?)\)/)?.[1]}` 
+            const labelUnits = graphConfig.dualUnits
+                ? `, ${graphConfig.fromUnits}`
+                : isLabelUnits
+                    ? `, ${graphConfig.yAxisLabel.match(/\((.*?)\)/)?.[1]}`
                     : ''
-                ;     
-                
-            group.append('text') // Value, units
-                .attr('x', 10 
-                    + markerColWidth 
-                    + nameColWidth
-                )
-                .attr('y', headerY)
-                .style('font-family', 'sans-serif')
-                .style('font-size', '8px')
-                .style('fill', '#999')
-                .text(`Value${labelUnits}`);
-        
+                ;
+
+            headerText('value', `Value${labelUnits}`, false);
 
             // Converted-units header — only rendered when dual-unit mode is active.
             if (graphConfig.dualUnits) {
-                group.append('text')
-                    .attr('x', 10 
-                        + markerColWidth 
-                        + nameColWidth 
-                        + valueColWidth
-                    )
-                    .attr('y', headerY)
-                    .style('font-family', 'sans-serif')
-                    .style('font-size', '8px')
-                    .style('fill', '#999')
-                    .text(`Value, ${graphConfig.toUnits}`);
+                headerText('value2', `Value, ${graphConfig.toUnits}`, false);
             }
         }
 
@@ -595,49 +733,34 @@ export class UnifiedTableRenderer {
             const rowY = currentY + 12;
             // Header row for the value column (missing if we ignore it)
             if ( row.type === 'header' ) {
-                if(!graphConfig.ignoreUnifiedValues){
+                if(showValues){
                     // The header row is rendered at y=12 (aligned with the title bar), not at
                     // `rowY`, so the X-axis label and value appear inline with the table title.
                     // The `return` at the end skips `currentY += 18`, so header rows consume
-                    // no vertical space in the data area.
-                
+                    // no vertical space in the data area. Anchored to the value column so it
+                    // sits above the values regardless of which category columns are present.
+
                     group.append('text')
-                        .attr('x', 10 
-                            + markerColWidth 
-                            + nameColWidth + 
-                            (graphConfig.dualUnits 
-                                ? valueColWidth 
-                                : 0
-                            ))
+                        .attr('x', colX('value'))
                         .attr('y', 12)
                         .style('font-family', 'sans-serif')
                         .style('font-size', '9px')
                         .style('font-weight', 'bold')
                         .style('fill', '#333')
-                        .text(row.value instanceof Date 
-                            ? `Date:` 
+                        .text(row.value instanceof Date
+                            ? `Date:`
                             : `${row.label}:`
                         );
 
                     const xValueFormatted = row.value instanceof Date
                         ? `${row.value.getMonth() + 1}/${row.value.getDate()}/${row.value.getFullYear()}`
-                        : (typeof row.value === 'number' 
-                            ? row.value.toFixed(2) 
+                        : (typeof row.value === 'number'
+                            ? row.value.toFixed(2)
                             : row.value
                         );
 
                     group.append('text')
-                        .attr('x', 10 
-                            + markerColWidth 
-                            + nameColWidth 
-                            + (graphConfig.dualUnits 
-                                ? valueColWidth 
-                                : valueColWidth / 2
-                            ) 
-                            + (graphConfig.dualUnits 
-                                ? secondValueColWidth / 2 
-                                : 0
-                            ))
+                        .attr('x', colX('value') + colW('value') / 2)
                         .attr('y', 12)
                         .style('font-family', 'sans-serif')
                         .style('font-size', '9px')
@@ -650,7 +773,7 @@ export class UnifiedTableRenderer {
             }
 
             // ── Marker glyph (left column) ────────────────────────────────────────────
-            const markerX = 10 + markerColWidth / 2;
+            const markerX = colX('marker') + colW('marker') / 2;
             const markerY = rowY - 4;
 
             if (row.graphType === 'line') {
@@ -695,26 +818,42 @@ export class UnifiedTableRenderer {
                     .attr('stroke-width', 1);
             }
 
-            // ── Series label (middle column) ──────────────────────────────────────────
-            // TODO: long labels overflow `nameColWidth`. A future improvement should use
-            // `_truncateText` or SVG text wrapping here. The word-wrap stub was removed;
-            // use _truncateText(row.label, ~28) as a quick fix until wrapping is implemented.
+            // ── Series label (name column) ────────────────────────────────────────────
+            // Truncation length is derived from the resolved column width, so it adapts when
+            // the column auto-fits to content.
             group.append('text')
-                .attr('x', 10 + markerColWidth)
+                .attr('x', colX('name'))
                 .attr('y', rowY)
                 .style('font-family', 'sans-serif')
                 .style('font-size', '9px')
                 .style('fill', '#333')
-                .text(row.label);
+                .text(this._truncateText(row.label, colChars('name')));
+
+            // ── Filter / Color category columns ───────────────────────────────────────
+            // The (none) group is rendered in muted italic to read as "absent".
+            const categoryCell = (key, text) => {
+                if (!text) return;
+                const isNone = text === SymbolFactory.MISSING_LABEL;
+                group.append('text')
+                    .attr('x', colX(key))
+                    .attr('y', rowY)
+                    .style('font-family', 'sans-serif')
+                    .style('font-size', '9px')
+                    .style('font-style', isNone ? 'italic' : 'normal')
+                    .style('fill', isNone ? '#94a3b8' : '#475569')
+                    .text(this._truncateText(text, colChars(key)));
+            };
+            if (hasFilterCol) categoryCell('filter', row.filterLabel);
+            if (hasColorCol)  categoryCell('color', row.colorLabel);
 
             // ── Primary value column ──────────────────────────────────────────────────
-            if(!graphConfig.ignoreUnifiedValues){
+            if(showValues){
                 const valueFormatted = row.value === 'N/A'
                     ? 'N/A'
                     : (typeof row.value === 'number' ? (row.value).toFixed(2) : row.value);
 
                 group.append('text')
-                    .attr('x', 10 + markerColWidth + nameColWidth)
+                    .attr('x', colX('value'))
                     .attr('y', rowY)
                     .style('font-family', 'sans-serif')
                     .style('font-size', '9px')
@@ -731,7 +870,7 @@ export class UnifiedTableRenderer {
                     : (typeof row.value === 'number' ? (row.value / graphConfig.scaleFactor).toPrecision(4) : row.value);
                 if (graphConfig.dualUnits) {
                     group.append('text')
-                        .attr('x', 10 + markerColWidth + nameColWidth + valueColWidth)
+                        .attr('x', colX('value2'))
                         .attr('y', rowY)
                         .style('font-family', 'sans-serif')
                         .style('font-size', '9px')

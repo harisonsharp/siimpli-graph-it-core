@@ -11,14 +11,12 @@
  * @function parseColumnId - Parse column identifiers with optional file associations
  * @function resolveColumn - Resolve column references by name or index
  * @function extractColumnNames - Extract column names from data
- *
- * @exports parseColumnId, resolveColumn, extractColumnNames
+ * @exports parseColumnId, resolveColumn, extractColumnNames, 
  *
  * @example
  * const columnInfo = parseColumnId('temperature::data.csv');
  * const columnName = resolveColumn(data, 0);
  * const columns = extractColumnNames(csvData);
- *
  * @relatedFiles graphUtils.js (original), dataUtils.js
  */
 
@@ -71,6 +69,14 @@ export const resolveColumn = (csvData, key) => {
     
     return key;
 };
+
+export const splitColumnFilename = (axis) => {
+    const columnFileList = axis.split("::");
+    return {
+        columnName: columnFileList[0],
+        fileName: columnFileList[1]
+    }
+}
 
 /**
  * Extract column names from CSV data

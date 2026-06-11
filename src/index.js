@@ -11,6 +11,7 @@ export * from './utils/debug.js';
 export * from './utils/graphUtils.js';
 export * from './utils/axisUtils.js';
 export * from './utils/dataUtils.js';
+export * from './utils/colorUtils.js'
 export * from './utils/columnUtils.js';
 export * from './utils/curveFittingUtils.js';
 export * from './utils/dualAxisUtils.js';
