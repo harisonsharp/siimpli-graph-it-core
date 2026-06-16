@@ -82,7 +82,15 @@ export function useGraphRenderer({
                 debugWarn('[useGraphRenderer] Canvas sizing failed:', sizingError);
             }
 
-            if (onSuccess) onSuccess({ success: true, margin, finalDimensions });
+            // Expose scales + plot dimensions so consumers can attach zoom/pan
+            // behaviour (e.g. useGraphZoom) to the already-rendered SVG.
+            if (onSuccess) onSuccess({
+                success: true,
+                margin,
+                finalDimensions,
+                scales: result.scales,
+                dimensions: result.dimensions
+            });
             return true;
         } catch (error) {
             debugWarn('Failed to generate graph:', error);
