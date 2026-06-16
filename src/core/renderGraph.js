@@ -37,11 +37,11 @@ function parseColumnInformation(config) {
                 yAxisInfo: parseColumnId(s.yAxis)
             }))
             .filter(s => s.yAxisInfo.columnName);
-
+    
     const colorInfo = parseColumnId(config.colorGrading);
     const contourInfo = graphType === 'histogram' ? null : parseColumnId(config.contouring);
 
-    return { xAxisInfo, xAxis2Info, seriesInfo, colorInfo, contourInfo, graphType };
+    return { xAxisInfo, xAxis2Info, seriesInfo, colorInfo, contourInfo, graphType};
 }
 
 /**
@@ -386,6 +386,8 @@ function renderLegends(svg, validData, scales, columnInfo, config, dimensions, s
  * @param {boolean} [options.isBatchMode=false] - Whether rendering in headless batch mode
  * @returns {{success: boolean, error?: string, margin?: Object}} Result status
  */
+
+// TODO: columnInfo.seriesInfo has one difference from graphConfig.series: yAxisInfo. Find a solution s.t. we can simplify the data object, hopefully by just using graphConfig.
 export function renderGraph({
     svg: svgNode,
     csvData,

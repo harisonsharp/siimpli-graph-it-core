@@ -27,6 +27,7 @@ import { debugWarn } from '../../utils/debug.js';
 import { parseNumber } from '../../utils/dataUtils.js';
 import { parseColumnId } from '../../utils/columnUtils.js';
 import { HoverTableRenderer } from '../HoverTableRenderer.js';
+import { SymbolFactory } from '../../utils/SymbolFactory.js';
 
 export class BaseChartRenderer {
     static HOVER_MODAL_CLASS = HoverTableRenderer.HOVER_MODAL_CLASS;
@@ -135,15 +136,19 @@ export class BaseChartRenderer {
         // Per-series color grading takes priority
         if (colorScale && colorInfo?.columnName) {
             const value = dataPoint[colorInfo.columnName];
-            if (value !== undefined && value !== null) {
-                return colorScale(value);
+            // Missing color value → explicit neutral "(none)" color, not the series default,
+            // so absent-value points are visibly distinct in the plot.
+            if (value === undefined || value === null || value === '') {
+                return SymbolFactory.MISSING_COLOR;
             }
+            return colorScale(value);
         }
         const series = config.series.filter(s => s.yAxis.split('::')[1] === dataPoint._sourceFile && Array.from(Object.keys(dataPoint)).includes(s.yAxis.split('::')[0]));
         if (series.length === 0) {
             debugWarn('[BASE_CHART_RENDERER - getPointColor] No series found for data point when getting color', dataPoint);
             return fallbackColor || this.getDefaultColor();
         }
+        // FIXME: why just series[0]?
         return ScaleFactory.resolveColor(series[0].color) || fallbackColor || this.getDefaultColor();
     }
 

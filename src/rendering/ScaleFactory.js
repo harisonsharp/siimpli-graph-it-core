@@ -169,7 +169,7 @@ export class ScaleFactory {
      * @returns {d3.ScaleOrdinal} Ordinal color scale
      */
     static CUSTOM_COLOR_MAP = {
-        'blue': '#1f77b4',
+        'blue': '#3E68C6',
         'orange': '#ff7f0e',
         'green': '#2ca02c',
         'red': '#d62728',

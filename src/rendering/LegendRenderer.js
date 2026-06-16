@@ -311,7 +311,8 @@ export class LegendRenderer {
             }
             debugLog('[LegendRenderer.drawSeriesLegend] uniqueValues', uniqueValues);
             if (series.excludeEmptyValues) {
-                uniqueValues = uniqueValues.filter(v => v !== undefined && v !== null && v !== '');
+                // getUniqueValues folds null/blank into MISSING_CATEGORY; drop that group.
+                uniqueValues = uniqueValues.filter(v => v !== SymbolFactory.MISSING_CATEGORY);
             }
             const symbolMap = SymbolFactory.getSymbolMap(uniqueValues);
             debugLog('[LegendRenderer.drawSeriesLegend] uniqueValues, symbolMap', uniqueValues, symbolMap);
@@ -325,12 +326,19 @@ export class LegendRenderer {
                 // Ensure we have a map. If not provided on series object, generate it on the fly (failsafe)
 
 
-                subItems = uniqueValues.map(val => ({
-                    label: `${series.titleName} - ${val}`, // Requirement: Series Name - Unique Value
-                    shapeType: 'symbol',
-                    symbol: SymbolFactory.getSymbol(val, symbolMap),
-                    color: ScaleFactory.resolveColor(series.color) || colorScale(series.yAxisInfo.columnName) // Use series color for all shapes? Or distinct? Usually series color.
-                }));
+                subItems = uniqueValues.map(val => {
+                    const isMissing = val === SymbolFactory.MISSING_CATEGORY;
+                    const displayVal = isMissing ? SymbolFactory.MISSING_LABEL : val;
+                    return {
+                        label: `${series.titleName} - ${displayVal}`, // Requirement: Series Name - Unique Value
+                        shapeType: 'symbol',
+                        symbol: SymbolFactory.getSymbol(val, symbolMap),
+                        // The (none) group uses the shared neutral color; graded groups keep the series color.
+                        color: isMissing
+                            ? SymbolFactory.MISSING_COLOR
+                            : (ScaleFactory.resolveColor(series.color) || colorScale(series.yAxisInfo.columnName))
+                    };
+                });
             } else {
                 // Default single item
                 let label = series.titleName || series.yAxisInfo.columnName;
