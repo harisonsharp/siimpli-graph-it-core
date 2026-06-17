@@ -21,7 +21,7 @@
 
 import * as d3 from 'd3';
 import { DataValidator } from '../core/validation/DataValidator.js';
-import { generateCustomBins } from '../utils/histogram.js';
+import { generateCustomBins, generateStackedBins } from '../utils/histogram.js';
 import { debugLog, debugWarn } from '../utils/debug.js';
 import { parseColumnId } from '../utils/columnUtils.js';
 export class ScaleFactory {
@@ -497,13 +497,25 @@ export class ScaleFactory {
         const xScale = this.createLinearScale(xDomain, [0, width]);
 
         const numBinsOverride = config?.numBins ? Number(config.numBins) : null;
-        const skipOutliers = staticXScale !== null;
-        const domainMin = staticXScale ? Number(staticXScale.min) : null;
-        const domainMax = staticXScale ? Number(staticXScale.max) : null;
-        const bins = generateCustomBins(values, numBinsOverride, skipOutliers, domainMin, domainMax);
-        const normalBins = bins.filter(b => !b.isOutlierBin);
-        const maxCount = normalBins.length > 0 ? d3.max(normalBins, bin => bin.values.length) : 1;
+        const skipOutliers    = staticXScale !== null;
+        const domainMin       = staticXScale ? Number(staticXScale.min) : null;
+        const domainMax       = staticXScale ? Number(staticXScale.max) : null;
 
+        let maxCount;
+        if (config.stackBy) {
+            // Stacked histogram: y-axis ceiling is the tallest bin's *total* across all groups.
+            // We call generateStackedBins on the raw row objects so each row's group label
+            // is available alongside its x value — generateCustomBins only sees x numbers.
+            const stackByInfo   = parseColumnId(config.stackBy);
+            const stackByColumn = stackByInfo?.columnName ?? config.stackBy;
+            const stackedBins   = generateStackedBins(data, xAxisInfo.columnName, stackByColumn, numBinsOverride, skipOutliers, domainMin, domainMax);
+            const normalBins    = stackedBins.filter(b => !b.isOutlierBin);
+            maxCount = normalBins.length > 0 ? d3.max(normalBins, bin => bin.total) : 1;
+        } else {
+            const bins       = generateCustomBins(values, numBinsOverride, skipOutliers, domainMin, domainMax);
+            const normalBins = bins.filter(b => !b.isOutlierBin);
+            maxCount = normalBins.length > 0 ? d3.max(normalBins, bin => bin.values.length) : 1;
+        }
         const staticYScale = this.getStaticScaleConfig(config, 'y');
         let yDomain;
         if (staticYScale) {

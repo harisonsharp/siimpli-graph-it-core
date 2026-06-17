@@ -23,8 +23,10 @@
 
 import * as d3 from 'd3';
 import { BaseChartRenderer } from './BaseChartRenderer.js';
-import { generateCustomBins } from '../../utils/histogram.js';
+import { generateCustomBins, generateStackedBins } from '../../utils/histogram.js';
+import { parseColumnId } from '../../utils/columnUtils.js';
 import { debugLog, debugWarn } from '../../utils/debug.js';
+
 
 export class HistogramRenderer extends BaseChartRenderer {
     /**
@@ -42,6 +44,16 @@ export class HistogramRenderer extends BaseChartRenderer {
         this.outlierColor = options.outlierColor || '#888';
         this.opacity = options.opacity || 0.8;
     }
+    
+    // Default palette assigned to groups in alphabetical order (Group 1 → Group 4).
+    // Override per-group via config.stackColors: { "Group 1 - Precious Only": "#hex", ... }
+    static STACKED_PALETTE = [
+        '#f59e0b', // amber — Group 1 (Precious Only)
+        '#ef4444', // red   — Group 2 (Precious Primary + Base)
+        '#0ea5e9', // sky   — Group 3 (Base Metal Only)
+        '#9ca3af', // gray  — Group 4 (Other / Unclassified)
+    ];
+
 
     /**
      * Get renderer type
@@ -106,6 +118,39 @@ export class HistogramRenderer extends BaseChartRenderer {
             debugWarn('XAxisInfo:', xAxisInfo);
             return;
         }
+
+        // --- Stacked histogram path ---
+        // When config.stackBy is set, each bin is split by a categorical column.
+        // We render and return early so the normal single-color path below is untouched.
+        if (config.stackBy) {
+            const stackByColumn = parseColumnId(config.stackBy)?.columnName
+                ?? config.stackBy.split('::')[0];
+            const numBinsOvr  = config?.numBins ? Number(config.numBins) : null;
+            const staticX     = config?.staticScales?.x;
+            const skipOut     = staticX?.enabled === true;
+            const dMin        = skipOut ? Number(staticX.min) : null;
+            const dMax        = skipOut ? Number(staticX.max) : null;
+
+            // generateStackedBins needs the full row objects (not just x values)
+            // so it can read each row's group label alongside its x value.
+            const stackedBins = generateStackedBins(data, xAxisInfo.columnName, stackByColumn, numBinsOvr, skipOut, dMin, dMax);
+            const normalBins  = stackedBins.filter(b => !b.isOutlierBin);
+
+            // Groups are sorted alphabetically inside generateStackedBins —
+            // pull the order from the first bin's keys so our color assignment is consistent.
+            const groupNames = normalBins.length > 0 ? Object.keys(normalBins[0].groups) : [];
+
+            // Map each group name to a palette color; support per-group overrides via config
+            const colorMap = {};
+            groupNames.forEach((name, i) => {
+                colorMap[name] = config.stackColors?.[name]
+                    ?? HistogramRenderer.STACKED_PALETTE[i % HistogramRenderer.STACKED_PALETTE.length];
+            });
+
+            this.renderStackedBins(g, normalBins, xScale, yScale, groupNames, colorMap);
+            return;
+        }
+
 
         // Generate bins using custom binning algorithm (override if user specified numBins)
         const numBinsOverride = config?.numBins ? Number(config.numBins) : null;
@@ -172,6 +217,52 @@ export class HistogramRenderer extends BaseChartRenderer {
             .attr('stroke', '#fff')
             .attr('stroke-width', 1)
    
+    }
+
+    /**
+     * Render stacked histogram bars.
+     *
+     * Each bin is drawn as a vertical stack of colored rectangles, one per group,
+     * ordered bottom-up by groupNames. The stacking math mirrors a D3 stack layout:
+     * each segment sits on top of the cumulative count of the groups below it.
+     *
+     * @param {d3.Selection} g          - D3 group selection (same coordinate space as axes)
+     * @param {Array}        bins        - Stacked bins from generateStackedBins (isOutlierBin=false only)
+     * @param {d3.Scale}     xScale      - X-axis scale
+     * @param {d3.Scale}     yScale      - Y-axis scale
+     * @param {string[]}     groupNames  - Ordered list of group labels (determines stacking order)
+     * @param {Object}       colorMap    - { groupName: hexColor } map for fill colors
+     */
+    renderStackedBins(g, bins, xScale, yScale, groupNames, colorMap) {
+        bins.forEach(bin => {
+            // running count accumulated from the bottom of the stack (data units)
+            let runningCount = 0;
+
+            groupNames.forEach(group => {
+                const count = bin.groups[group] ?? 0;
+                if (count === 0) return; // nothing to draw for this group in this bin
+
+                // yScale maps data counts to pixel y — larger count = higher up = smaller pixel y
+                const yTop    = yScale(runningCount + count); // top of this segment
+                const yBot    = yScale(runningCount);         // bottom of this segment (sits on previous group)
+                const segH    = Math.max(0, yBot - yTop);
+                const segX    = xScale(bin.min);
+                const segW    = Math.max(0, xScale(bin.max) - xScale(bin.min) - 1);
+
+                g.append('rect')
+                    .attr('class', `histogram-bar histogram-stacked-segment`)
+                    .attr('x', segX)
+                    .attr('y', yTop)
+                    .attr('width', segW)
+                    .attr('height', segH)
+                    .attr('fill', colorMap[group] ?? '#9ca3af')
+                    .attr('opacity', this.opacity)
+                    .attr('stroke', '#fff')
+                    .attr('stroke-width', 0.5);
+
+                runningCount += count;
+            });
+        });
     }
 
     /**
