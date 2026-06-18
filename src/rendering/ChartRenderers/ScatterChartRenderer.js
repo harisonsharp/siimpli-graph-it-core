@@ -124,6 +124,11 @@ export class ScatterChartRenderer extends BaseChartRenderer {
         };
 
         let finalRadius = currentSeriesConfig ? currentSeriesConfig.strokeWidth : this.radius;
+        // Per-series opacity override (e.g. semi-transparent dots for dense overlays so an
+        // underlying line stays visible). Falls back to the renderer default when unset.
+        const finalOpacity = (currentSeriesConfig && currentSeriesConfig.opacity != null)
+            ? currentSeriesConfig.opacity
+            : this.opacity;
         // Calculate area from radius: Area = pi * r^2
         // D3 symbol size is area in square pixels
         const symbolArea = Math.PI * Math.pow(parseFloat(finalRadius || this.radius), 2);
@@ -173,7 +178,7 @@ export class ScatterChartRenderer extends BaseChartRenderer {
             .attr('d', (_d, i) => symbolPaths[i])
             .attr('transform', (_d, i) => transforms[i])
             .style('fill', (_d, i) => fills[i])
-            .style('opacity', this.opacity)
+            .style('opacity', finalOpacity)
             .style('stroke', '#000')
             .style('stroke-width', 0.5);
 

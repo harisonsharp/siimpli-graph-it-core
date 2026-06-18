@@ -490,13 +490,14 @@ export function renderGraph({
         const contourLegend = renderContours(g, svg, validData, scales, columnInfo, targetGraphConfig, globalSettings, graphService) || null;
         const curveLegend = renderCurveFits(g, curveFits, scales, dimensions, columnInfo, graphService, axisInfo, targetGraphConfig) || { legendItems: [] };
          if (logoDataUri) {
-            const { width } = dimensions;
+            // Bottom-left of the figure, below the x-axis ticks (CanvasSizer expands the
+            // SVG to include it, so a position in the bottom margin is not clipped).
             svg.append('image')
                 .attr('href', logoDataUri)
-                .attr('x', dimensions.margin.left / 2 - 20)
-                .attr('y', dimensions.height + dimensions.margin.top - 50)
-                .attr('width', 60)
-                .attr('height', 60);
+                .attr('x', 6)
+                .attr('y', dimensions.height + dimensions.margin.top + 18)
+                .attr('width', 52)
+                .attr('height', 52);
         }
 
         if (globalSettings.showUnifiedTable && globalSettings.showStaticTable) {

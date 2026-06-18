@@ -284,10 +284,19 @@ export class LegendRenderer {
      */
 
     static drawSeriesLegend(graphConfig, svg, validData, seriesInfo, colorScale, graphDimensions, margin, xOffset = 90) {
-        // if (graphConfig.series.filter()
-        const legend = svg.append("g")
-            .attr("transform", `translate(${margin.left}, ${margin.top + graphDimensions.height - margin.bottom / 2})`);
-        // .attr("transform", `translate(${graphDimensions.width - margin.right + xOffset}, ${margin.top})`);
+        // Legend placement. Defaults to bottom-left (below the plot); 'top-right' / 'bottom-right'
+        // tuck it into a chart corner — set via graphConfig.legendPosition in the template.
+        const LEGEND_W = 150; // approx width reserved when right-aligning
+        const legendPosition = graphConfig?.legendPosition || 'bottom-left';
+        let legendTransform;
+        if (legendPosition === 'top-right') {
+            legendTransform = `translate(${margin.left + graphDimensions.width - LEGEND_W}, ${margin.top + 10})`;
+        } else if (legendPosition === 'bottom-right') {
+            legendTransform = `translate(${margin.left + graphDimensions.width - LEGEND_W}, ${margin.top + graphDimensions.height - margin.bottom / 2})`;
+        } else {
+            legendTransform = `translate(${margin.left}, ${margin.top + graphDimensions.height - margin.bottom / 2})`;
+        }
+        const legend = svg.append("g").attr("transform", legendTransform);
 
         debugLog('[LegendRenderer.drawSeriesLegend]', seriesInfo, colorScale, graphDimensions, margin, xOffset);
 

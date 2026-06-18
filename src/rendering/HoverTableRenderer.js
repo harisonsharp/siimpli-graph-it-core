@@ -165,10 +165,14 @@ export class HoverTableRenderer {
             return allowedFields.has(fieldName);
         };
 
+        // Skip empty cells so sparse columns (e.g. the inactive series in a UNION line+scatter
+        // dataset) don't render as blank rows in the tooltip.
+        const isEmpty = (v) => v === null || v === undefined || v === '';
+
         Object.entries(pointData).forEach(([key, value]) => {
             if (key === '__informative' && value && typeof value === 'object') {
                 Object.entries(value).forEach(([infoKey, infoValue]) => {
-                    if (shouldIncludeField(infoKey)) {
+                    if (shouldIncludeField(infoKey) && !isEmpty(infoValue)) {
                         rows.push([`informative.${infoKey}`, infoValue]);
                     }
                 });
@@ -179,7 +183,7 @@ export class HoverTableRenderer {
                 return;
             }
 
-            if (shouldIncludeField(key)) {
+            if (shouldIncludeField(key) && !isEmpty(value)) {
                 rows.push([key, value]);
             }
         });

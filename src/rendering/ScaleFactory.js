@@ -401,14 +401,26 @@ export class ScaleFactory {
                         yMax = Math.max(yMax, maxCount);
                     }
                 } else if (config.dualUnits && axis === 'secondary') {
-                    const yValues = data.map(d => +d[s.yAxisInfo.columnName] / config.scaleFactor).filter(v => !isNaN(v) && isFinite(v));
+                    // Exclude null/undefined/'' BEFORE numeric coercion: +'' and +null both === 0,
+                    // which would otherwise drag the axis floor to 0 for sparse columns (e.g. the
+                    // empty cells produced by a UNION ALL line+scatter dataset).
+                    const yValues = data
+                        .map(d => d[s.yAxisInfo.columnName])
+                        .filter(v => v !== null && v !== undefined && v !== '')
+                        .map(v => +v / config.scaleFactor)
+                        .filter(v => !isNaN(v) && isFinite(v));
                     if (yValues.length > 0) {
                         const yExtent = d3.extent(yValues);
                         yMin = Math.min(yMin, yExtent[0]);
                         yMax = Math.max(yMax, yExtent[1]);
                     }
                 } else {
-                    const yValues = data.map(d => +d[s.yAxisInfo.columnName]).filter(v => !isNaN(v) && isFinite(v));
+                    // Exclude null/undefined/'' BEFORE numeric coercion (see note above).
+                    const yValues = data
+                        .map(d => d[s.yAxisInfo.columnName])
+                        .filter(v => v !== null && v !== undefined && v !== '')
+                        .map(v => +v)
+                        .filter(v => !isNaN(v) && isFinite(v));
                     if (yValues.length > 0) {
                         const yExtent = d3.extent(yValues);
                         yMin = Math.min(yMin, yExtent[0]);
