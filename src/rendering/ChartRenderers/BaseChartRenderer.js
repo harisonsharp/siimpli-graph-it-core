@@ -32,6 +32,20 @@ import { SymbolFactory } from '../../utils/SymbolFactory.js';
 export class BaseChartRenderer {
     static HOVER_MODAL_CLASS = HoverTableRenderer.HOVER_MODAL_CLASS;
 
+    // When a point is hovered, every other point is repainted with this flat, fully-opaque
+    // neutral colour rather than being made transparent. Transparency would stack where many
+    // points overlap (a dense cluster of faded dots still reads as solid), whereas overlapping
+    // opaque grey dots all composite to the same grey — so the dimming looks identical
+    // regardless of how many points pile up. The hovered point keeps its real colour/opacity.
+    static HOVER_DIM_COLOR = '#dde3ea';
+
+    // Class for the throwaway overlay copy of the hovered point. We draw a clone on top of
+    // everything rather than physically re-ordering the real point in the DOM — moving the
+    // hovered node disrupts the browser's pointer tracking (causing stuck/lingering hovers)
+    // and would need order-restoration bookkeeping. The clone is non-interactive and simply
+    // removed on mouse-leave, so the real points never move.
+    static POINT_HIGHLIGHT_CLASS = 'dot-highlight';
+
     constructor() {
         this.hoverTableRenderer = new HoverTableRenderer();
     }
@@ -183,6 +197,93 @@ export class BaseChartRenderer {
 
     hidePointHoverModal(g) {
         this.hoverTableRenderer.hide(g);
+    }
+
+    /**
+     * Resolve the SVG root that owns the current chart group. All point highlighting is
+     * scoped to this root so charts rendered into separate SVGs (e.g. popups) don't dim
+     * each other's points.
+     * @param {d3.Selection} g - D3 group selection for the current chart render
+     * @returns {SVGSVGElement|null}
+     */
+    getHostSvg(g) {
+        return g?.node?.()?.ownerSVGElement ?? null;
+    }
+
+    /**
+     * Read a point's stored base opacity (set at render time), falling back to fully opaque.
+     * @param {Element} el - The point element
+     * @returns {number}
+     */
+    getPointBaseOpacity(el) {
+        const base = parseFloat(el.getAttribute('data-base-opacity'));
+        return Number.isFinite(base) ? base : 1;
+    }
+
+    /**
+     * Restore a single point to its rendered appearance (base fill + base opacity).
+     * @param {Element} el - The point element
+     */
+    restorePointAppearance(el) {
+        el.style.fill = el.getAttribute('data-base-fill') || el.style.fill;
+        el.style.opacity = this.getPointBaseOpacity(el);
+    }
+
+    /**
+     * Remove any existing highlight clones from the SVG.
+     * @param {SVGSVGElement} svg - Host SVG root
+     */
+    removePointHighlightClones(svg) {
+        svg.querySelectorAll(`.${BaseChartRenderer.POINT_HIGHLIGHT_CLASS}`)
+            .forEach((clone) => clone.remove());
+    }
+
+    /**
+     * Emphasize a single hovered point. Every real point (including the hovered one) is
+     * greyed out with a flat, fully-opaque neutral colour so the dimming is consistent no
+     * matter how densely points overlap (see HOVER_DIM_COLOR). A non-interactive clone of
+     * the hovered point is then drawn on top in its real colour, so it both stands out and
+     * is never occluded — without moving the real point (which would break pointer tracking).
+     * @param {d3.Selection} g - D3 group selection for the current chart render
+     * @param {Element} target - The hovered point element
+     */
+    highlightPoint(g, target) {
+        const svg = this.getHostSvg(g);
+        if (!svg) {
+            return;
+        }
+
+        svg.querySelectorAll('.dot').forEach((el) => {
+            el.style.fill = BaseChartRenderer.HOVER_DIM_COLOR;
+            el.style.opacity = 1;
+        });
+
+        // Draw a colour copy of the hovered point on top. Appending into the point's own
+        // parent keeps it in the same coordinate space (the transform attribute matches),
+        // and as the last sibling it paints above every other point.
+        this.removePointHighlightClones(svg);
+        const clone = target.cloneNode(true);
+        clone.classList.remove('dot');
+        clone.classList.add(BaseChartRenderer.POINT_HIGHLIGHT_CLASS);
+        clone.style.pointerEvents = 'none'; // never steal hover from the real point
+        clone.style.fill = target.getAttribute('data-base-fill') || target.style.fill;
+        clone.style.opacity = this.getPointBaseOpacity(target);
+        target.parentNode?.appendChild(clone);
+    }
+
+    /**
+     * Restore every point to its base fill/opacity and remove the highlight clone,
+     * undoing highlightPoint(). The real points never moved, so order is preserved.
+     * @param {d3.Selection} g - D3 group selection for the current chart render
+     */
+    clearPointHighlight(g) {
+        const svg = this.getHostSvg(g);
+        if (!svg) {
+            return;
+        }
+
+        this.removePointHighlightClones(svg);
+        svg.querySelectorAll('.dot').forEach((el) => this.restorePointAppearance(el));
     }
 
     getPdfLinkingConfig(config = {}) {

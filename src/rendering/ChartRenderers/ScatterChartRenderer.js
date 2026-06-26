@@ -179,18 +179,26 @@ export class ScatterChartRenderer extends BaseChartRenderer {
             .attr('transform', (_d, i) => transforms[i])
             .style('fill', (_d, i) => fills[i])
             .style('opacity', finalOpacity)
+            // Remember each point's base fill + opacity so hover highlighting can grey out the
+            // others and later restore them to their original (possibly per-series) appearance.
+            .attr('data-base-opacity', finalOpacity)
+            .attr('data-base-fill', (_d, i) => fills[i])
+            // Smoothly cross-fade colour/opacity when hover highlighting greys out the others.
+            .style('transition', 'fill 120ms ease-out, opacity 120ms ease-out')
             .style('stroke', '#000')
             .style('stroke-width', 0.5);
 
         dots
             .on('mouseenter', (event, d) => {
                 this.cancelPointHoverHide(g);
+                this.highlightPoint(g, event.currentTarget);
                 this.showPointHoverModal(g, event, d, { seriesName: yColName, graphConfig: config });
             })
             .on('mousemove', () => {
                 this.cancelPointHoverHide(g);
             })
             .on('mouseleave', (event) => {
+                this.clearPointHighlight(g);
                 if (event.relatedTarget?.closest?.(`.${BaseChartRenderer.HOVER_MODAL_CLASS}`)) {
                     return;
                 }
