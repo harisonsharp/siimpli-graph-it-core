@@ -1,6 +1,6 @@
 {
     "name": "@harisonsharp/graph-it-core",
-    "version": "0.3.63",
+    "version": "0.3.64",
     "description": "Core logic and components for SiimpliGraphIt",
     "main": "src/index.js",
     "type": "module",
