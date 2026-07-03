@@ -257,11 +257,19 @@ export class UnifiedTableRenderer {
 
         const rows = [];
 
+        // X values arrive as Dates on time axes, but targetX is coerced to a
+        // number (epoch ms) for bisection — restore the Date so the header
+        // formats as a date instead of e.g. "1756710000000.00".
+        const xIsDate = sortedData.length > 0 &&
+            sortedData[sortedData.length - 1][xCol] instanceof Date;
+
         // Header row with X value
         rows.push({
             type: 'header',
             label: graphConfig.xAxisLabel || xCol,
-            value: targetX,
+            value: xIsDate && typeof targetX === 'number' && isFinite(targetX)
+                ? new Date(targetX)
+                : targetX,
             color: '#333'
         });
         

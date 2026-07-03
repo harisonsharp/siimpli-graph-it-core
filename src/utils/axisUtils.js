@@ -148,6 +148,33 @@ const buildTickValues = (min, max, step, maxTicks = 500) => {
     return ticks;
 };
 
+/**
+ * Tick positions for a log₁₀-transformed axis domain, in log space.
+ * Wide spans tick at decades only; narrower spans subdivide (1-2-5, then
+ * every digit) so a zoomed-in view still gets labelled ticks.
+ * @param {number} logMin - Domain minimum (log₁₀ space)
+ * @param {number} logMax - Domain maximum (log₁₀ space)
+ * @returns {Array<number>} Tick positions in log₁₀ space
+ */
+export const logTickValues = (logMin, logMax) => {
+    const span = logMax - logMin;
+    const mantissas = span >= 3 ? [1]
+        : span >= 1.5 ? [1, 2, 5]
+        : [1, 2, 3, 4, 5, 6, 7, 8, 9];
+    const ticks = [];
+    for (let k = Math.floor(logMin); k <= Math.ceil(logMax); k++) {
+        for (const m of mantissas) {
+            const t = k + Math.log10(m);
+            if (t >= logMin && t <= logMax) ticks.push(t);
+        }
+    }
+    return ticks;
+};
+
+// Back-transform a log-space tick to its real value for labelling.
+// toPrecision strips float noise (10 ** log10(2) = 1.9999…) before formatting.
+const formatLogTick = (d) => formatNumber(Number((10 ** d).toPrecision(6)), 6);
+
 const drawXAxis = (g, xScale, xAxisY, xAxisLabelOffset, xAxisLabel, graphType, data, xAxisInfo, config = {}, color = '#333') => {
     // Create axis generator
     const axisGenerator = d3.axisBottom(xScale);
@@ -227,8 +254,18 @@ const drawXAxis = (g, xScale, xAxisY, xAxisLabelOffset, xAxisLabel, graphType, d
                 axisGenerator.tickValues(buildTickValues(staticXScale.min, staticXScale.max, staticXScale.step));
             }
             if (config?.logX) {
-                // Tick values are log₁₀-transformed — display as the log value (e.g. 4 for 10000)
-                axisGenerator.tickFormat(d => Number(d.toPrecision(4)).toString());
+                // Scale domain is log₁₀-transformed. Tick at decade (and, when
+                // the span is narrow, mantissa) positions and label them with
+                // the REAL value (1, 10, 100…) so the axis reads in natural
+                // units while remaining log-spaced.
+                if (!staticXScale) {
+                    const [logMin, logMax] = xScale.domain();
+                    const ticks = logTickValues(logMin, logMax);
+                    if (ticks.length > 0) {
+                        axisGenerator.tickValues(ticks);
+                    }
+                }
+                axisGenerator.tickFormat(formatLogTick);
             } else {
                 axisGenerator.tickFormat(d => formatNumber(d, 6));
             }
@@ -450,7 +487,10 @@ export const drawAxes = (
         const xDomain = xScale.domain();
         const yDomain = primaryYScale.domain();
 
-        if (xDomain[0] <= 0 && xDomain[1] >= 0) {
+        // On a log axis the domain is log₁₀-transformed, so log-space 0 is the
+        // data value 1, not the origin — x=0 doesn't exist on a log scale.
+        // Keep the axis pinned to the edge instead of crossing at 1.
+        if (!config.logX && xDomain[0] <= 0 && xDomain[1] >= 0) {
             // For histograms with a centered-bin domain (e.g. [-0.5, 20.5]),
             // xScale(0) lands slightly right of the left edge. Pin to pixel 0
             // so the y-axis always sits flush against the left margin.
@@ -458,12 +498,18 @@ export const drawAxes = (
                 config.series?.some(s => s.graphType === 'histogram');
             yAxisX = isHistogram ? 0 : Math.max(0, Math.min(width, xScale(0)));
         }
-        if (yDomain[0] <= 0 && yDomain[1] >= 0) {
+        if (!config.logY && yDomain[0] <= 0 && yDomain[1] >= 0) {
             xAxisY = Math.max(0, Math.min(height, primaryYScale(0)));
         }
     } else if (config.axisIntercept === 'custom' && config.customIntercept) {
-        const customX = Number.parseFloat(config.customIntercept.x) || 0;
-        const customY = Number.parseFloat(config.customIntercept.y) || 0;
+        const customXRaw = Number.parseFloat(config.customIntercept.x) || 0;
+        const customYRaw = Number.parseFloat(config.customIntercept.y) || 0;
+
+        // Custom intercepts are given in data units; map into log space when
+        // the scale domain is log₁₀-transformed (non-positive values have no
+        // log-space position, so the axis stays at the edge).
+        const customX = config.logX ? (customXRaw > 0 ? Math.log10(customXRaw) : NaN) : customXRaw;
+        const customY = config.logY ? (customYRaw > 0 ? Math.log10(customYRaw) : NaN) : customYRaw;
 
         const xDomain = xScale.domain();
         const yDomain = primaryYScale.domain();
@@ -484,7 +530,9 @@ export const drawAxes = (
     const primaryColor = axisColors?.primary || '#333';
     const secondaryColor = axisColors?.secondary || '#333';
 
-    const finalXLabel = config?.logX ? `${xAxisLabel} (log\u2081\u2080)` : xAxisLabel;
+    // Log-X axis is labelled with real values (decades), so keep the natural
+    // axis label without a "(log\u2081\u2080)" suffix. Log-Y still shows transformed ticks.
+    const finalXLabel = xAxisLabel;
     const finalYLabelWithLog = config?.logY ? `${finalPrimaryLabel} (log\u2081\u2080)` : finalPrimaryLabel;
 
     drawXAxis(g, xScale, xAxisY, 50, finalXLabel, graphType, data, xAxisInfo, config, primaryColor);
@@ -498,7 +546,7 @@ export const drawAxes = (
 
     // Draw guide lines if enabled
     if (globalSettings.showGuideLines) {
-        drawGuideLines(g, xScale, primaryYScale, width, height);
+        drawGuideLines(g, xScale, primaryYScale, width, height, config);
     }
 
     return { xAxisY, xAxisLabelOffset: 50 };
@@ -540,7 +588,7 @@ export const validateAxisConfig = (axisConfig) => {
  * @param {number} width - Graph width
  * @param {number} height - Graph height
  */
-export const drawGuideLines = (g, xScale, yScale, width, height) => {
+export const drawGuideLines = (g, xScale, yScale, width, height, config = {}) => {
     // Create a group for guide lines (behind data)
     const guideGroup = g.insert('g', ':first-child')
         .attr('class', 'guide-lines')
@@ -562,8 +610,10 @@ export const drawGuideLines = (g, xScale, yScale, width, height) => {
     // Vertical guide lines (based on X-axis ticks)
     // Handle both linear and band scales
     if (xScale.ticks) {
-        // Linear scale
-        const xTicks = xScale.ticks();
+        // Linear scale — for logX match the labelled decade/mantissa ticks
+        const xTicks = config?.logX
+            ? logTickValues(...xScale.domain())
+            : xScale.ticks();
         xTicks.forEach(tick => {
             guideGroup.append('line')
                 .attr('x1', xScale(tick))
