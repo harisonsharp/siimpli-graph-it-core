@@ -113,6 +113,22 @@ const formatNumber = (value, thresholdDigits) => {
     return value;
 };
 
+/**
+ * Convert a log10-transformed axis tick value back to its natural value for display,
+ * optionally scaled by a unit divisor (e.g. divisor 1000 to show t/day ticks as ktpd).
+ * @param {number} d - log10-transformed tick value
+ * @param {number} divisor - divides the natural value before formatting
+ * @returns {string} Formatted natural value
+ */
+const formatNaturalLogValue = (d, divisor = 1) => {
+    const natural = (10 ** d) / divisor;
+    if (!isFinite(natural)) return '';
+
+    const absVal = Math.abs(natural);
+    const precision = absVal >= 100 ? 0 : absVal >= 1 ? 1 : 2;
+    return d3.format(`,.${precision}~f`)(natural);
+};
+
 const getStaticScale = (config, axisKey) => {
     const axisScale = config?.staticScales?.[axisKey];
     if (!axisScale || axisScale.enabled !== true) {
@@ -170,10 +186,6 @@ export const logTickValues = (logMin, logMax) => {
     }
     return ticks;
 };
-
-// Back-transform a log-space tick to its real value for labelling.
-// toPrecision strips float noise (10 ** log10(2) = 1.9999…) before formatting.
-const formatLogTick = (d) => formatNumber(Number((10 ** d).toPrecision(6)), 6);
 
 const drawXAxis = (g, xScale, xAxisY, xAxisLabelOffset, xAxisLabel, graphType, data, xAxisInfo, config = {}, color = '#333') => {
     // Create axis generator
@@ -256,7 +268,7 @@ const drawXAxis = (g, xScale, xAxisY, xAxisLabelOffset, xAxisLabel, graphType, d
             if (config?.logX) {
                 // Scale domain is log₁₀-transformed. Tick at decade (and, when
                 // the span is narrow, mantissa) positions and label them with
-                // the REAL value (1, 10, 100…) so the axis reads in natural
+                // the natural value (1, 10, 100…) so the axis reads in natural
                 // units while remaining log-spaced.
                 if (!staticXScale) {
                     const [logMin, logMax] = xScale.domain();
@@ -265,7 +277,7 @@ const drawXAxis = (g, xScale, xAxisY, xAxisLabelOffset, xAxisLabel, graphType, d
                         axisGenerator.tickValues(ticks);
                     }
                 }
-                axisGenerator.tickFormat(formatLogTick);
+                axisGenerator.tickFormat(d => formatNaturalLogValue(d, config?.xAxisUnitDivisor || 1));
             } else {
                 axisGenerator.tickFormat(d => formatNumber(d, 6));
             }
@@ -335,7 +347,7 @@ const drawPrimaryYAxis = (g, xScale, primaryYScale, yAxisX, primaryColor, config
     const axisGenerator = d3.axisLeft(primaryYScale)
         .tickSizeOuter(0)
         .tickFormat(d => config?.logY
-            ? Number(d.toPrecision(4)).toString()
+            ? formatNaturalLogValue(d, config?.yAxisUnitDivisor || 1)
             : formatNumber(d, 8));
 
     const staticYScale = getStaticScale(config, 'y');
@@ -530,10 +542,10 @@ export const drawAxes = (
     const primaryColor = axisColors?.primary || '#333';
     const secondaryColor = axisColors?.secondary || '#333';
 
-    // Log-X axis is labelled with real values (decades), so keep the natural
-    // axis label without a "(log\u2081\u2080)" suffix. Log-Y still shows transformed ticks.
+    // Axis labels show the natural unit (ticks display natural values, not log exponents),
+    // even though the underlying scale spacing remains logarithmic.
     const finalXLabel = xAxisLabel;
-    const finalYLabelWithLog = config?.logY ? `${finalPrimaryLabel} (log\u2081\u2080)` : finalPrimaryLabel;
+    const finalYLabelWithLog = finalPrimaryLabel;
 
     drawXAxis(g, xScale, xAxisY, 50, finalXLabel, graphType, data, xAxisInfo, config, primaryColor);
     drawPrimaryYAxis(g, xScale, primaryYScale, yAxisX, primaryColor, config);
