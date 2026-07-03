@@ -34,7 +34,7 @@ jobs:
           github-token: ${{ secrets.DISPATCH_PAT }}
           script: |
             const version = context.ref.replace('refs/tags/', '');
-            const repos = ['siimpli-graph-it-headless', 'siimpli-graph-it', 'mine_analytics'];
+            const repos = ['siimpli-graph-it-headless', 'siimpli-graph-it', 'siimpli-mineit'];
             for (const repo of repos) {
               await github.rest.repos.createDispatchEvent({
                 owner: 'harisonsharp',
