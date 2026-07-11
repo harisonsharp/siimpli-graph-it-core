@@ -46,6 +46,12 @@ export class BaseChartRenderer {
     // removed on mouse-leave, so the real points never move.
     static POINT_HIGHLIGHT_CLASS = 'dot-highlight';
 
+    // Class toggled on the host SVG root while a point is hovered. The stylesheet injected
+    // by ensureHoverDimStyle() dims every dot through this single class flip. Dimming must
+    // never be done with per-dot inline style writes: that costs O(N) DOM writes per
+    // mouseenter/mouseleave and freezes dense scatters.
+    static HOVER_DIM_CLASS = 'graph-hover-dim';
+
     constructor() {
         this.hoverTableRenderer = new HoverTableRenderer();
     }
@@ -221,15 +227,6 @@ export class BaseChartRenderer {
     }
 
     /**
-     * Restore a single point to its rendered appearance (base fill + base opacity).
-     * @param {Element} el - The point element
-     */
-    restorePointAppearance(el) {
-        el.style.fill = el.getAttribute('data-base-fill') || el.style.fill;
-        el.style.opacity = this.getPointBaseOpacity(el);
-    }
-
-    /**
      * Remove any existing highlight clones from the SVG.
      * @param {SVGSVGElement} svg - Host SVG root
      */
@@ -239,11 +236,32 @@ export class BaseChartRenderer {
     }
 
     /**
+     * Inject the hover-dim stylesheet into the host SVG. It lives inside the SVG (not the
+     * app) so dimming works wherever the SVG ends up — app canvas, popup, or a standalone
+     * exported file. renderGraph clears the SVG on regeneration, so this re-injects lazily
+     * on the first hover after each render. `!important` beats each dot's inline base
+     * fill/opacity; the highlight clone drops the `dot` class, so the rule never dims it.
+     * @param {SVGSVGElement} svg - Host SVG root
+     */
+    ensureHoverDimStyle(svg) {
+        if (svg.querySelector('style[data-hover-dim]')) {
+            return;
+        }
+        const style = document.createElementNS('http://www.w3.org/2000/svg', 'style');
+        style.setAttribute('data-hover-dim', '');
+        style.textContent =
+            `.${BaseChartRenderer.HOVER_DIM_CLASS} .dot { fill: ${BaseChartRenderer.HOVER_DIM_COLOR} !important; opacity: 1 !important; }`;
+        svg.appendChild(style);
+    }
+
+    /**
      * Emphasize a single hovered point. Every real point (including the hovered one) is
      * greyed out with a flat, fully-opaque neutral colour so the dimming is consistent no
-     * matter how densely points overlap (see HOVER_DIM_COLOR). A non-interactive clone of
-     * the hovered point is then drawn on top in its real colour, so it both stands out and
-     * is never occluded — without moving the real point (which would break pointer tracking).
+     * matter how densely points overlap (see HOVER_DIM_COLOR) — applied as one class flip
+     * on the SVG root (HOVER_DIM_CLASS), never as per-dot style writes. A non-interactive
+     * clone of the hovered point is then drawn on top in its real colour, so it both stands
+     * out and is never occluded — without moving the real point (which would break pointer
+     * tracking).
      * @param {d3.Selection} g - D3 group selection for the current chart render
      * @param {Element} target - The hovered point element
      */
@@ -253,10 +271,8 @@ export class BaseChartRenderer {
             return;
         }
 
-        svg.querySelectorAll('.dot').forEach((el) => {
-            el.style.fill = BaseChartRenderer.HOVER_DIM_COLOR;
-            el.style.opacity = 1;
-        });
+        this.ensureHoverDimStyle(svg);
+        svg.classList.add(BaseChartRenderer.HOVER_DIM_CLASS);
 
         // Draw a colour copy of the hovered point on top. Appending into the point's own
         // parent keeps it in the same coordinate space (the transform attribute matches),
@@ -272,8 +288,8 @@ export class BaseChartRenderer {
     }
 
     /**
-     * Restore every point to its base fill/opacity and remove the highlight clone,
-     * undoing highlightPoint(). The real points never moved, so order is preserved.
+     * Un-dim all points and remove the highlight clone, undoing highlightPoint().
+     * The real points were never touched individually, so nothing needs restoring.
      * @param {d3.Selection} g - D3 group selection for the current chart render
      */
     clearPointHighlight(g) {
@@ -283,7 +299,7 @@ export class BaseChartRenderer {
         }
 
         this.removePointHighlightClones(svg);
-        svg.querySelectorAll('.dot').forEach((el) => this.restorePointAppearance(el));
+        svg.classList.remove(BaseChartRenderer.HOVER_DIM_CLASS);
     }
 
     getPdfLinkingConfig(config = {}) {

@@ -262,23 +262,24 @@ const drawXAxis = (g, xScale, xAxisY, xAxisLabelOffset, xAxisLabel, graphType, d
             // For ranges > 10 years let D3 auto-format (shows just the year, horizontal)
         } else {
             // Numeric X-Axis (Scatter, Line, etc.)
-            if (staticXScale) {
-                axisGenerator.tickValues(buildTickValues(staticXScale.min, staticXScale.max, staticXScale.step));
-            }
             if (config?.logX) {
                 // Scale domain is log₁₀-transformed. Tick at decade (and, when
                 // the span is narrow, mantissa) positions and label them with
                 // the natural value (1, 10, 100…) so the axis reads in natural
-                // units while remaining log-spaced.
-                if (!staticXScale) {
-                    const [logMin, logMax] = xScale.domain();
-                    const ticks = logTickValues(logMin, logMax);
-                    if (ticks.length > 0) {
-                        axisGenerator.tickValues(ticks);
-                    }
+                // units while remaining log-spaced. A static scale only changes
+                // the domain (already log-space in the scale), so the same tick
+                // generation applies — raw min/step tick values would land at
+                // log-space positions and misplace every tick.
+                const [logMin, logMax] = xScale.domain();
+                const ticks = logTickValues(logMin, logMax);
+                if (ticks.length > 0) {
+                    axisGenerator.tickValues(ticks);
                 }
                 axisGenerator.tickFormat(d => formatNaturalLogValue(d, config?.xAxisUnitDivisor || 1));
             } else {
+                if (staticXScale) {
+                    axisGenerator.tickValues(buildTickValues(staticXScale.min, staticXScale.max, staticXScale.step));
+                }
                 axisGenerator.tickFormat(d => formatNumber(d, 6));
             }
         }

@@ -238,7 +238,6 @@ export const fitCustomEquation = (data, equationStr) => {
     const validData = data.filter(p =>
         p && Number.isFinite(p.x) && Number.isFinite(p.y)
     );
-    if (validData.length < 1) throw new Error('No valid data points for R² calculation');
 
     // Collect only the points used in the fit (positive x, finite prediction)
     // so that meanY and ssTot are computed over the same subset as ssRes.
@@ -247,17 +246,20 @@ export const fitCustomEquation = (data, equationStr) => {
         .map(p => ({ ...p, yPred: evaluator(p.x) }))
         .filter(p => Number.isFinite(p.yPred));
 
-    if (fittedPoints.length < 1) throw new Error('No valid data points with x > 0 and finite prediction for R² calculation');
+    // A custom equation can be drawn over a range with no data under it —
+    // R² is simply unavailable there rather than an error.
+    let rSquared = null;
+    if (fittedPoints.length >= 1) {
+        const meanY = fittedPoints.reduce((s, p) => s + p.y, 0) / fittedPoints.length;
+        let ssTot = 0, ssRes = 0;
 
-    const meanY = fittedPoints.reduce((s, p) => s + p.y, 0) / fittedPoints.length;
-    let ssTot = 0, ssRes = 0;
+        for (const p of fittedPoints) {
+            ssTot += (p.y - meanY) ** 2;
+            ssRes += (p.y - p.yPred) ** 2;
+        }
 
-    for (const p of fittedPoints) {
-        ssTot += (p.y - meanY) ** 2;
-        ssRes += (p.y - p.yPred) ** 2;
+        rSquared = ssTot === 0 ? 1 : Math.max(0, Math.min(1, 1 - ssRes / ssTot));
     }
-
-    const rSquared = ssTot === 0 ? 1 : Math.max(0, Math.min(1, 1 - ssRes / ssTot));
 
     return {
         coefficients: null,
@@ -1542,7 +1544,10 @@ export const performCurveFitting = (csvData, config, curveFits) => {
         const rangeData = validData.filter(d => d.x >= fitXMin && d.x <= xMax);
         debugLog(`Curve fit ${index + 1}: ${rangeData.length} points in range [${xMin}, ${xMax}]`);
 
-        if (rangeData.length < 3) {
+        // Custom equations are evaluated, not fitted — they can legitimately be drawn
+        // over a range containing few or no data points (e.g. a step function's zero
+        // plateau below the lowest measured grade). All other fit types need data.
+        if (rangeData.length < 3 && curveFit.fitType !== 'custom') {
             debugWarn(`Insufficient data points in range [${xMin}, ${xMax}] for curve fit ${index + 1}: ${rangeData.length} points`);
             return { ...curveFit, result: null };
         }

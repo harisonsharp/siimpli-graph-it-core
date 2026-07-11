@@ -299,6 +299,14 @@ export class GraphCompositionRenderer {
             }
 
             const SAFE_LIMIT = 5000;
+            // X uses a much tighter clamp than SAFE_LIMIT: getBBox() ignores the clipPath,
+            // so path geometry far past the plot edge inflates CanvasSizer's DOM measurement
+            // and with it the popup window / export canvas. ~150px keeps enough off-plot
+            // control points to preserve the spline's exit slope, and control-point x values
+            // are monotone, so the clamped tail cannot swing back into the plot area. When
+            // there is no plot frame (plotWidth 0) there is also no clipPath — keep the old
+            // wide clamp so unclipped curves are not squashed.
+            const X_CLIP_PAD = plotWidth > 0 ? 150 : SAFE_LIMIT;
             // Log-axis scales have log10-transformed domains and expect pre-transformed inputs,
             // matching the pattern used by ScatterChartRenderer and LineChartRenderer.
             const mapX = (v) => _config?.logX && v > 0 ? Math.log10(v) : v;
@@ -309,7 +317,7 @@ export class GraphCompositionRenderer {
                 .x(d => {
                     const xValue = effectiveXScale(mapX(d.x));
                     if (Number.isNaN(xValue)) return 0;
-                    return Math.max(-SAFE_LIMIT, Math.min(plotWidth + SAFE_LIMIT, xValue));
+                    return Math.max(-X_CLIP_PAD, Math.min(plotWidth + X_CLIP_PAD, xValue));
                 })
                 .y(d => {
                     const yValue = thisYScale(mapY(d.y));
@@ -403,7 +411,7 @@ export class GraphCompositionRenderer {
                         })
                         .x(d => {
                             const xVal = effectiveXScale(mapX(d.x));
-                            return Number.isNaN(xVal) ? 0 : Math.max(-SAFE_LIMIT, Math.min(plotWidth + SAFE_LIMIT, xVal));
+                            return Number.isNaN(xVal) ? 0 : Math.max(-X_CLIP_PAD, Math.min(plotWidth + X_CLIP_PAD, xVal));
                         })
                         .y0(d => {
                             const yVal = thisYScale(mapY(d.y0));

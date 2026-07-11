@@ -748,17 +748,9 @@ export class UnifiedTableRenderer {
                     // no vertical space in the data area. Anchored to the value column so it
                     // sits above the values regardless of which category columns are present.
 
-                    group.append('text')
-                        .attr('x', colX('value'))
-                        .attr('y', 12)
-                        .style('font-family', 'sans-serif')
-                        .style('font-size', '9px')
-                        .style('font-weight', 'bold')
-                        .style('fill', '#333')
-                        .text(row.value instanceof Date
-                            ? `Date:`
-                            : `${row.label}:`
-                        );
+                    const headerLabel = row.value instanceof Date
+                        ? `Date:`
+                        : `${row.label}:`;
 
                     const xValueFormatted = row.value instanceof Date
                         ? `${row.value.getMonth() + 1}/${row.value.getDate()}/${row.value.getFullYear()}`
@@ -767,9 +759,34 @@ export class UnifiedTableRenderer {
                             : row.value
                         );
 
+                    // The value is right-aligned at the end of the value column and the label
+                    // ends just left of it, growing leftward into the empty strip between the
+                    // table title and the value column. Truncation only kicks in if the label
+                    // would reach back into the title, so a long x-axis label (e.g.
+                    // "Gold Grade in Concentrate (g/t):") can't overprint the value or title.
+                    const { charPx } = UnifiedTableRenderer.LAYOUT;
+                    const valueEndX = colX('value') + colW('value') - 2;
+                    const labelEndX = valueEndX - String(xValueFormatted).length * charPx - 8;
+                    const titleClearanceX = 60; // right edge of the bold "Legend" title, plus a gap
+                    const labelChars = Math.max(
+                        1,
+                        Math.floor((labelEndX - titleClearanceX) / charPx)
+                    );
+
                     group.append('text')
-                        .attr('x', colX('value') + colW('value') / 2)
+                        .attr('x', labelEndX)
                         .attr('y', 12)
+                        .attr('text-anchor', 'end')
+                        .style('font-family', 'sans-serif')
+                        .style('font-size', '9px')
+                        .style('font-weight', 'bold')
+                        .style('fill', '#333')
+                        .text(this._truncateText(headerLabel, labelChars));
+
+                    group.append('text')
+                        .attr('x', valueEndX)
+                        .attr('y', 12)
+                        .attr('text-anchor', 'end')
                         .style('font-family', 'sans-serif')
                         .style('font-size', '9px')
                         .style('font-weight', 'bold')

@@ -43,10 +43,23 @@ export class ScaleFactory {
      * @returns {d3.ScaleLinear} Linear scale
      */
     static createLinearScale(domain, range) {
-        DataValidator.validateDataExtents(domain);
+        let [min, max] = domain;
+        // Two or more rows can still share one value (e.g. several reports at the
+        // same grade), yielding a zero-width [v, v] domain. That is renderable —
+        // d3 maps the value to the range midpoint — so widen it symmetrically
+        // instead of letting validateDataExtents reject it and blank the chart. On
+        // a log axis the domain is already log10-space, so widening just opens the
+        // surrounding decade. min > max / non-finite still throw.
+        if (Number.isFinite(min) && Number.isFinite(max) && min === max) {
+            const eps = min === 0 ? 1 : Math.abs(min) * 0.05;
+            min -= eps;
+            max += eps;
+        }
+        const safeDomain = [min, max];
+        DataValidator.validateDataExtents(safeDomain);
 
         return d3.scaleLinear()
-            .domain(domain)
+            .domain(safeDomain)
             .range(range)
         // .nice();
     }
@@ -230,6 +243,9 @@ export class ScaleFactory {
      * @returns {Object} {xScale, yScale} scale objects (yScale may be {primary, secondary} for dual-axis)
      */
     static createScalesForGraph(data, xAxisInfo, seriesInfo, width, height, config) {
+        // renderGraph short-circuits to the NO DATA placeholder for < 2 valid
+        // rows, so this only ever sees >= 2. The default (minPoints=2) guard
+        // stays as a backstop.
         DataValidator.validateSufficientData(data);
 
         if (!xAxisInfo || !xAxisInfo.columnName) {
@@ -259,7 +275,6 @@ export class ScaleFactory {
 
         let xScale;
         const scaleType = this.inferScaleType(xValues);
-        const staticXScale = this.getStaticScaleConfig(config, 'x');
         debugLog('ScaleFactory.createScalesForGraph', 'scaleType', scaleType);
         if (scaleType === 'time') {
             // TODO: Support static scales for date-time axes.
@@ -284,13 +299,25 @@ export class ScaleFactory {
         } else {
             // Create linear (or log) scale for continuous data
             const xExtent = d3.extent(xValues, d => +d);
-            if (staticXScale) {
+            // Bounds may be partial: a blank min or max follows the data extent
+            // while the pinned side stays fixed (e.g. floor at 0.1 g/t, ceiling
+            // tracking the highest measured grade).
+            const staticXBounds = this.getStaticScaleBounds(config, 'x');
+            if (staticXBounds) {
                 if (config.logX) {
-                    const logMin = Math.log10(Math.max(staticXScale.min, 1e-10));
-                    const logMax = Math.log10(Math.max(staticXScale.max, 1e-10));
+                    const positiveXValues = xValues.filter(v => +v > 0);
+                    const dataLogExtent = d3.extent(positiveXValues, d => Math.log10(+d));
+                    let logMin = staticXBounds.min !== null ? Math.log10(Math.max(staticXBounds.min, 1e-10)) : dataLogExtent[0];
+                    let logMax = staticXBounds.max !== null ? Math.log10(Math.max(staticXBounds.max, 1e-10)) : dataLogExtent[1];
+                    if (!Number.isFinite(logMin)) logMin = Number.isFinite(logMax) ? logMax - 1 : 0;
+                    if (!(logMax > logMin)) logMax = logMin + 1;
                     xScale = this.createLinearScale([logMin, logMax], [0, width]);
                 } else {
-                    xScale = this.createLinearScale([staticXScale.min, staticXScale.max], [0, width]);
+                    let min = staticXBounds.min !== null ? staticXBounds.min : xExtent[0];
+                    let max = staticXBounds.max !== null ? staticXBounds.max : xExtent[1];
+                    if (!Number.isFinite(min)) min = Number.isFinite(max) ? max - 1 : 0;
+                    if (!(max > min)) max = min + 1;
+                    xScale = this.createLinearScale([min, max], [0, width]);
                 }
             } else if (xExtent[0] === undefined || xExtent[1] === undefined || isNaN(xExtent[0]) || isNaN(xExtent[1])) {
                 // Fallback to band if numeric fails
@@ -690,5 +717,31 @@ export class ScaleFactory {
         }
 
         return { min, max, step };
+    }
+
+    /**
+     * Parse static scale bounds allowing a PARTIAL spec: min or max may be left
+     * blank, in which case that side is null and the caller lets it follow the
+     * data extent (e.g. pin the floor at 0.1 while the ceiling tracks the
+     * highest point). Unlike getStaticScaleConfig — which requires the full
+     * min/max/step spec because it also drives static tick generation — this is
+     * for domain construction only; ticks fall back to automatic generation
+     * when the spec is partial.
+     */
+    static getStaticScaleBounds(config, axisKey) {
+        const axisScale = config?.staticScales?.[axisKey];
+        if (!axisScale || axisScale.enabled !== true) {
+            return null;
+        }
+
+        const min = Number.parseFloat(axisScale.min);
+        const max = Number.parseFloat(axisScale.max);
+        const hasMin = Number.isFinite(min);
+        const hasMax = Number.isFinite(max);
+
+        if (!hasMin && !hasMax) return null;
+        if (hasMin && hasMax && max <= min) return null;
+
+        return { min: hasMin ? min : null, max: hasMax ? max : null };
     }
 }

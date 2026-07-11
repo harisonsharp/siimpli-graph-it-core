@@ -347,3 +347,59 @@ describe('renderGraph integration tests', () => {
         openSpy.mockRestore();
     });
 });
+
+// Self-contained (no external CSV fixture) so it runs even where the
+// integration suite's data file is absent.
+describe('renderGraph NO DATA placeholder', () => {
+    let svg;
+
+    beforeEach(() => {
+        document.body.innerHTML = '';
+        svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+        document.body.appendChild(svg);
+    });
+
+    const settings = {
+        graphDimensions: { width: 1200, height: 800 },
+        colorScheme: 'default'
+    };
+    const config = {
+        graphType: 'scatter',
+        title: 'Zinc Concentrate Cadmium Refining Charges',
+        xAxis: 'report_date',
+        series: [{ yAxis: 'cd_rc_value', type: 'scatter' }]
+    };
+
+    const expectNoDataRender = (result) => {
+        expect(result.success).toBe(true);
+        expect(result.noData).toBe(true);
+        const texts = Array.from(svg.querySelectorAll('text')).map(t => t.textContent);
+        expect(texts).toContain('NO DATA');
+        expect(texts).toContain('Zinc Concentrate Cadmium Refining Charges');
+    };
+
+    it('renders NO DATA for an empty csvData array', () => {
+        const result = renderGraph({
+            svg, csvData: [], graphConfig: config, globalSettings: settings, colorSchemes: {}
+        });
+        expectNoDataRender(result);
+    });
+
+    it('renders NO DATA when no rows are valid for the configured columns', () => {
+        const csvData = [
+            { report_date: '2025-01-01', cd_rc_value: null },
+            { report_date: '2025-02-01', cd_rc_value: '' }
+        ];
+        const result = renderGraph({
+            svg, csvData, graphConfig: config, globalSettings: settings, colorSchemes: {}
+        });
+        expectNoDataRender(result);
+    });
+
+    it('still fails on genuine config errors (missing xAxis)', () => {
+        const result = renderGraph({
+            svg, csvData: [], graphConfig: { series: [{ yAxis: 'v' }] }, globalSettings: settings, colorSchemes: {}
+        });
+        expect(result.success).toBe(false);
+    });
+});

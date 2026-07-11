@@ -17,6 +17,7 @@ import { debugLog, debugWarn } from '../utils/debug.js';
 import { LegendRenderer } from '../rendering/LegendRenderer.js';
 import { UnifiedTableRenderer } from '../rendering/UnifiedTableRenderer.js';
 import { BiasTableRenderer } from '../rendering/BiasTableRenderer.js';
+import { BaseChartRenderer } from '../rendering/ChartRenderers/BaseChartRenderer.js';
 
 /**
  * Parses column identifiers from configuration.
@@ -330,6 +331,50 @@ function renderCurveFits(g, fits, scales, dimensions, columnInfo, graphService, 
 }
 
 /**
+ * Renders a centered "NO DATA" placeholder in the plot area.
+ * Used when the configured columns yield too few valid rows to plot (zero rows,
+ * or a single point which cannot form a trend) so viewers see an explicit
+ * message instead of a blank chart. Must be a *successful* render: the headless
+ * BatchRunner throws on success:false, which turns a no-data graph into a 500 on
+ * the /graph PNG endpoint. `message` overrides the default sub-caption.
+ */
+function renderNoDataPlaceholder(svg, dimensions, message = 'No data is currently available for this chart') {
+    const { margin, width, height } = dimensions;
+    const g = svg
+        .append('g')
+        .attr('class', 'no-data-placeholder')
+        .attr('transform', `translate(${margin.left},${margin.top})`);
+
+    g.append('rect')
+        .attr('width', width)
+        .attr('height', height)
+        .attr('fill', 'none')
+        .attr('stroke', '#ccc')
+        .attr('stroke-dasharray', '6,4');
+
+    g.append('text')
+        .attr('x', width / 2)
+        .attr('y', height / 2)
+        .attr('text-anchor', 'middle')
+        .attr('dy', '0.35em')
+        .style('font-family', 'sans-serif')
+        .style('font-size', '48px')
+        .style('font-weight', 'bold')
+        .style('letter-spacing', '0.15em')
+        .style('fill', '#b0b0b0')
+        .text('NO DATA');
+
+    g.append('text')
+        .attr('x', width / 2)
+        .attr('y', height / 2 + 40)
+        .attr('text-anchor', 'middle')
+        .style('font-family', 'sans-serif')
+        .style('font-size', '16px')
+        .style('fill', '#999')
+        .text(message);
+}
+
+/**
  * Renders legends.
  */
 function renderLegends(svg, validData, scales, columnInfo, config, dimensions, settings, graphService, legendArtifacts = {}) {
@@ -401,7 +446,9 @@ export function renderGraph({
     try {
         const graphType = (graphConfig?.graphType || 'scatter').toLowerCase();
 
-        if (!graphConfig.xAxis || !csvData || csvData.length === 0) {
+        // Empty csvData is NOT an error here: it falls through to the
+        // validData check below, which renders a "NO DATA" placeholder.
+        if (!graphConfig.xAxis || !csvData) {
             debugWarn('Missing required data for graph generation');
             return { success: false, error: 'Missing required data' };
         }
@@ -413,6 +460,9 @@ export function renderGraph({
 
         const svg = d3.select(svgNode);
         svg.selectAll('*').remove();
+        // The hover-dim class sits on the SVG root, so clearing children doesn't reset it.
+        // Drop it here or a re-render that interrupts an active hover draws every dot dimmed.
+        svg.classed(BaseChartRenderer.HOVER_DIM_CLASS, false);
 
         const columnInfo = parseColumnInformation(graphConfig);
         if (columnInfo.graphType !== 'histogram' && columnInfo.seriesInfo.length === 0) {
@@ -467,9 +517,43 @@ export function renderGraph({
             columnInfo.seriesInfo.map(s => s.yAxisInfo)
         );
 
-        if (validData.length === 0) {
-            debugWarn('No valid data points found');
-            return { success: false, error: 'No valid data points' };
+        // A single point cannot form a plot/trend, so treat 1 valid row the same
+        // as 0 — show the placeholder with a message explaining why, rather than a
+        // lone dot floating in the middle of the chart. (Zero rows keep the
+        // generic NO DATA caption.)
+        if (validData.length < 2) {
+            const onePoint = validData.length === 1;
+            debugWarn(onePoint
+                ? 'Only 1 valid data point — need 2+ to plot; rendering placeholder'
+                : 'No valid data points found — rendering NO DATA placeholder');
+            renderTitle(svg, targetGraphConfig, columnInfo, globalSettings, dimensions);
+            renderNoDataPlaceholder(
+                svg,
+                dimensions,
+                onePoint
+                    ? 'Only 1 data point available — 2 or more are needed to plot'
+                    : undefined
+            );
+            if (logoDataUri) {
+                svg.append('image')
+                    .attr('href', logoDataUri)
+                    .attr('x', 6)
+                    .attr('y', dimensions.height + dimensions.margin.top + 18)
+                    .attr('width', 52)
+                    .attr('height', 52);
+            }
+            // No scales/g in the result: consumers (e.g. the popup's zoom
+            // setup) already guard on result.scales before attaching behaviour.
+            return {
+                success: true,
+                noData: true,
+                margin: dimensions.margin,
+                svg,
+                validData,
+                columnInfo,
+                dimensions,
+                targetGraphConfig
+            };
         }
 
         attachInformativeFields(validData, targetGraphConfig);

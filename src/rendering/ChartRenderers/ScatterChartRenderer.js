@@ -179,12 +179,13 @@ export class ScatterChartRenderer extends BaseChartRenderer {
             .attr('transform', (_d, i) => transforms[i])
             .style('fill', (_d, i) => fills[i])
             .style('opacity', finalOpacity)
-            // Remember each point's base fill + opacity so hover highlighting can grey out the
-            // others and later restore them to their original (possibly per-series) appearance.
+            // Remember each point's base fill + opacity so the hover highlight clone can be
+            // drawn in the point's original (possibly per-series) appearance.
             .attr('data-base-opacity', finalOpacity)
             .attr('data-base-fill', (_d, i) => fills[i])
-            // Smoothly cross-fade colour/opacity when hover highlighting greys out the others.
-            .style('transition', 'fill 120ms ease-out, opacity 120ms ease-out')
+            // Deliberately no fill/opacity CSS transition here: it would animate every dot
+            // each time the hover-dim class flips, freezing dense scatters under thousands
+            // of concurrent paint-bound SVG animations.
             .style('stroke', '#000')
             .style('stroke-width', 0.5);
 
