@@ -336,9 +336,11 @@ function renderCurveFits(g, fits, scales, dimensions, columnInfo, graphService, 
  * or a single point which cannot form a trend) so viewers see an explicit
  * message instead of a blank chart. Must be a *successful* render: the headless
  * BatchRunner throws on success:false, which turns a no-data graph into a 500 on
- * the /graph PNG endpoint. `message` overrides the default sub-caption.
+ * the /graph PNG endpoint. `message` overrides the default sub-caption;
+ * `detailLines` renders extra caption lines below it (used to describe the
+ * lone point in the 1-row case).
  */
-function renderNoDataPlaceholder(svg, dimensions, message = 'No data is currently available for this chart') {
+function renderNoDataPlaceholder(svg, dimensions, message = 'No data is currently available for this chart', detailLines = []) {
     const { margin, width, height } = dimensions;
     const g = svg
         .append('g')
@@ -372,6 +374,50 @@ function renderNoDataPlaceholder(svg, dimensions, message = 'No data is currentl
         .style('font-size', '16px')
         .style('fill', '#999')
         .text(message);
+
+    detailLines.forEach((line, i) => {
+        g.append('text')
+            .attr('x', width / 2)
+            .attr('y', height / 2 + 72 + i * 22)
+            .attr('text-anchor', 'middle')
+            .style('font-family', 'sans-serif')
+            .style('font-size', '14px')
+            .style('fill', '#888')
+            .text(line);
+    });
+}
+
+/**
+ * Builds "label: value" caption lines describing the single valid row, for the
+ * 1-point placeholder: x value, each series' y value, then any configured
+ * informative fields. Empty cells are skipped; long values are truncated so
+ * they stay inside the plot area.
+ */
+function buildSinglePointDetails(row, columnInfo, graphConfig) {
+    const fmt = (v) => {
+        const s = String(v);
+        return s.length > 60 ? s.slice(0, 57) + '…' : s;
+    };
+
+    const pairs = [];
+    const xName = columnInfo.xAxisInfo.columnName;
+    pairs.push([graphConfig.xAxisLabel || xName, row[xName]]);
+    columnInfo.seriesInfo.forEach((s) => {
+        pairs.push([s.yAxisInfo.columnName, row[s.yAxisInfo.columnName]]);
+    });
+    Object.entries(row.__informative || {}).forEach(([name, value]) => {
+        pairs.push([name, value]);
+    });
+
+    const lines = pairs
+        .filter(([, v]) => v !== undefined && v !== null && String(v).trim() !== '')
+        .slice(0, 8)
+        .map(([name, v]) => `${name}: ${fmt(v)}`);
+
+    if (lines.length > 0) {
+        lines.unshift('The available point:');
+    }
+    return lines;
 }
 
 /**
@@ -527,12 +573,18 @@ export function renderGraph({
                 ? 'Only 1 valid data point — need 2+ to plot; rendering placeholder'
                 : 'No valid data points found — rendering NO DATA placeholder');
             renderTitle(svg, targetGraphConfig, columnInfo, globalSettings, dimensions);
+            let detailLines = [];
+            if (onePoint) {
+                attachInformativeFields(validData, targetGraphConfig);
+                detailLines = buildSinglePointDetails(validData[0], columnInfo, targetGraphConfig);
+            }
             renderNoDataPlaceholder(
                 svg,
                 dimensions,
                 onePoint
                     ? 'Only 1 data point available — 2 or more are needed to plot'
-                    : undefined
+                    : undefined,
+                detailLines
             );
             if (logoDataUri) {
                 svg.append('image')

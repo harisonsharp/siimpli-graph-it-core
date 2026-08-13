@@ -324,12 +324,25 @@ export class ScaleFactory {
                 const uniqueXValues = [...new Set(xValues)];
                 xScale = this.createBandScale(uniqueXValues, [0, width], 0.5);
             } else {
+                // axisIntercept 'custom': extend the x-domain to include
+                // customIntercept.x so the y-axis line can cross there.
+                // Numeric axes only — the time/band branches above ignore it.
+                const ix = config.axisIntercept === 'custom'
+                    ? Number.parseFloat(config.customIntercept?.x)
+                    : NaN;
                 if (config.logX) {
                     const positiveXValues = xValues.filter(v => +v > 0);
-                    const logExtent = d3.extent(positiveXValues, d => Math.log10(+d));
+                    let logExtent = d3.extent(positiveXValues, d => Math.log10(+d));
+                    if (Number.isFinite(ix) && ix > 0 && Number.isFinite(logExtent[0])) {
+                        const logIx = Math.log10(ix);
+                        logExtent = [Math.min(logExtent[0], logIx), Math.max(logExtent[1], logIx)];
+                    }
                     xScale = this.createLinearScale(logExtent, [0, width]);
                 } else {
-                    xScale = this.createLinearScale(xExtent, [0, width]);
+                    const domain = Number.isFinite(ix)
+                        ? [Math.min(xExtent[0], ix), Math.max(xExtent[1], ix)]
+                        : xExtent;
+                    xScale = this.createLinearScale(domain, [0, width]);
                 }
             }
         }
@@ -479,13 +492,34 @@ export class ScaleFactory {
             return this.createLinearScale([axisStaticScale.min, axisStaticScale.max], [height, 0]);
         }
 
+        // axisIntercept 'custom' guarantees the crossing point is reachable:
+        // extend the y-domain to include customIntercept.y (y2 for the
+        // secondary axis), so e.g. {y: 0} forces a 0 floor and drawAxes can
+        // place the x-axis line there. Without this the intercept is silently
+        // ignored whenever the data extent doesn't already span it. Values a
+        // log axis can't reach (<= 0) are ignored; static scales already
+        // returned above and keep full manual control.
+        let interceptIsFloor = false;
+        if (config.axisIntercept === 'custom') {
+            const key = axis === 'secondary' ? 'y2' : 'y';
+            const iy = Number.parseFloat(config.customIntercept?.[key]);
+            if (Number.isFinite(iy) && !(config.logY && iy <= 0)) {
+                if (iy <= yMin) {
+                    yMin = iy;
+                    interceptIsFloor = true;
+                }
+                if (iy > yMax) yMax = iy;
+            }
+        }
+
         // Add visual padding to create space at top and bottom of chart
         // This provides better visual spacing and prevents data from touching edges
-        // For bar charts or when minimum is non-negative, don't pad below 0
-        const shouldStartAtZero = hasBarSeries;
-        const bottomPad = shouldStartAtZero ? 0 : 0.05;
-        const topPad = shouldStartAtZero ? 0 : 0.05;
-        const finalMin = shouldStartAtZero ? Math.min(0, yMin) : yMin;
+        // For bar charts — or when the floor is pinned to a custom intercept —
+        // don't pad below the floor
+        const shouldPinFloor = hasBarSeries || interceptIsFloor;
+        const bottomPad = shouldPinFloor ? 0 : 0.05;
+        const topPad = hasBarSeries ? 0 : 0.05;
+        const finalMin = hasBarSeries ? Math.min(0, yMin) : yMin;
 
         if (config.logY) {
             const positiveMin = Math.max(finalMin, 1e-10);
