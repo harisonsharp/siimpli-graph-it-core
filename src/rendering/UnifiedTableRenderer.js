@@ -412,6 +412,30 @@ export class UnifiedTableRenderer {
     }
 
     /**
+     * Resolves the full column id backing a category dimension, from the first series that
+     * defines it. For the symbol dimension pass `'filterColumn'`; for the colour dimension pass
+     * `'colorGrading'` (its `.column` sub-field is read).
+     *
+     * The id is returned unparsed — file suffix included — so two dimensions are only treated
+     * as the same source when they name the same column of the same dataset (two datasets can
+     * each carry a `DepositCode` that means something different).
+     *
+     * @private
+     * @param {Object} graphConfig - Graph configuration with a `series` array.
+     * @param {'filterColumn'|'colorGrading'} kind - Which dimension's column to resolve.
+     * @returns {string|null} The raw column id, or null when no series defines that dimension.
+     */
+    static _firstColumnId(graphConfig, kind) {
+        for (const series of (graphConfig.series || [])) {
+            const raw = kind === 'colorGrading'
+                ? (series.colorGrading?.enabled ? series.colorGrading.column : null)
+                : series.filterColumn;
+            if (raw && parseColumnId(raw).columnName) return raw;
+        }
+        return null;
+    }
+
+    /**
      * Resolves the display name for a category column header from the first series that defines it.
      * For the symbol dimension pass `'filterColumn'`; for the colour dimension pass `'colorGrading'`
      * (its `.column` sub-field is read). Returns `null` when no series defines that dimension.
@@ -422,16 +446,8 @@ export class UnifiedTableRenderer {
      * @returns {string|null} The bare column name (file suffix stripped), or null.
      */
     static _firstColumnName(graphConfig, kind) {
-        for (const series of (graphConfig.series || [])) {
-            const raw = kind === 'colorGrading'
-                ? (series.colorGrading?.enabled ? series.colorGrading.column : null)
-                : series.filterColumn;
-            if (raw) {
-                const name = parseColumnId(raw).columnName;
-                if (name) return name;
-            }
-        }
-        return null;
+        const raw = this._firstColumnId(graphConfig, kind);
+        return raw ? parseColumnId(raw).columnName : null;
     }
 
     static _newFunction(targetX, filteredData, xCol, yCol, series, symbolValue, colorValue, color, symbolType) {
@@ -612,7 +628,18 @@ export class UnifiedTableRenderer {
         // The Filter (symbol) and Color columns appear only when at least one data row actually
         // carries that dimension — ordinary series shouldn't show two empty columns.
         const hasFilterCol = rowData.some(r => r.type === 'series' && r.filterLabel);
-        const hasColorCol = rowData.some(r => r.type === 'series' && r.colorLabel);
+
+        // A template may drive BOTH dimensions from one column — e.g. DepositCode giving each
+        // deposit type its own symbol AND its own colour — which is a legitimate encoding, not a
+        // mistake to correct in the template. But the two columns then print the same category
+        // twice side by side (getDistinctSeriesColors derives colours per symbol group, so the
+        // rows pair up one-to-one). Collapse them into the single Filter column when they resolve
+        // to the same source; the colour itself is still shown, by the row's marker.
+        const symbolColumnId = this._firstColumnId(graphConfig, 'filterColumn');
+        const colorColumnId = this._firstColumnId(graphConfig, 'colorGrading');
+        const sameCategoryColumn = !!symbolColumnId && symbolColumnId === colorColumnId;
+        const hasColorCol = rowData.some(r => r.type === 'series' && r.colorLabel)
+            && !(sameCategoryColumn && hasFilterCol);
 
         // Header text for the two category columns: the underlying column names from the first
         // series that defines them, falling back to generic labels.
