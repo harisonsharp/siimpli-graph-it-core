@@ -59,6 +59,11 @@ export class ScatterChartRenderer extends BaseChartRenderer {
      * @param {Object} colorInfo - Optional color column info. In the case where color grading is distinct, this object has the columnName and the fileName the grading is based on.
      * @param {string} seriesColor - Optional series color
      * @param {Object} seriesConfig - The specific series configuration object for this render call
+     * @param {Array<string>} [seriesConfig.visibleCategories] - Allow-list of `filterColumn`
+     *   values to PLOT. Everything outside it stays in the data — same symbols, same colours,
+     *   same axes, and a full house of rows in the legend/value table — but is not drawn.
+     *   Omit it (the default) to plot every category. Only meaningful alongside
+     *   `filter`/`filterColumn`, since that is what names the categories.
      */
     render(g, data, scales, xAxisInfo, yAxisInfo, config, colorScale = null, colorInfo = null, seriesColor = null, seriesConfig = null) {
         debugLog('ScatterChartRenderer.render - Start of Method', {
@@ -107,6 +112,28 @@ export class ScatterChartRenderer extends BaseChartRenderer {
             debugLog('[ScatterChartRenderer.render] validData, filterColumn', validData, filterColumn);
             const uniqueValues = SymbolFactory.getUniqueValues(validData, filterColumn);
             symbolMap = SymbolFactory.getSymbolMap(uniqueValues);
+
+            // Show one category, keep the chart otherwise whole.
+            //
+            // Deliberately applied AFTER the symbol map is built and never to the dataset
+            // itself: every category still exists as far as the symbol map, the colour
+            // scale, the axes and the legend/value table are concerned, so a category keeps
+            // the SAME glyph and colour whether it is the only one on the plot or one of a
+            // dozen. Dropping the other rows upstream instead — the obvious way to do this —
+            // silently reassigns both (the survivor becomes category #1 and takes the first
+            // glyph and the first colour), which makes two views of one chart impossible to
+            // compare and empties the legend of everything the reader was comparing against.
+            const visible = currentSeriesConfig.visibleCategories;
+            if (Array.isArray(visible)) {
+                const allowed = new Set(visible.map(v => SymbolFactory.normalizeCategory(v)));
+                validData = validData.filter(
+                    d => allowed.has(SymbolFactory.normalizeCategory(d[filterColumn]))
+                );
+                if (validData.length === 0) {
+                    debugLog('[ScatterChartRenderer.render] No points in visibleCategories', visible);
+                    return;
+                }
+            }
         }
 
         // Handle both band and linear scales for x-axis

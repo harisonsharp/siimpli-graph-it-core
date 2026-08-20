@@ -49,6 +49,20 @@ import { getDistinctSeriesColors } from '../utils/colorUtils.js';
  * │   ■    │ Lead (bar)        │ 1.80      │[…]      │
  * └────────┴───────────────────┴───────────┴─────────┘
  * ```
+ *
+ * When one categorical series is expanded per category, its name is the same on every row,
+ * so the Series column collapses into the category column and the categories take its place:
+ * ```
+ * ┌──────────────────────────────────────────────┐
+ * │  Legend & Most Recent Values   Across: n=138 │
+ * ├────────┬──────────────────────┬──────────────┤
+ * │        │ DepositCode          │ Median, %    │
+ * ├────────┼──────────────────────┼──────────────┤
+ * │   ●    │ VMS                  │ 4.10         │
+ * │   ▲    │ Epithermal vein      │ 5.35         │
+ * │   ──   │ Model: 1.53 × head   │ 4.56         │
+ * └────────┴──────────────────────┴──────────────┘
+ * ```
  */
 export class UnifiedTableRenderer {
     /**
@@ -125,6 +139,12 @@ export class UnifiedTableRenderer {
      * @param {string} [graphConfig.fromUnits] - Unit label for the primary value column.
      * @param {string} [graphConfig.toUnits] - Unit label for the converted value column.
      * @param {number} [graphConfig.scaleFactor] - Divisor applied to convert primary → secondary units.
+     * @param {'value'|'median'} [graphConfig.unifiedValueMode] - What the value column holds.
+     *   `'value'` (default) is the Y at the selected/most-recent X; `'median'` is each row's own
+     *   median over its data, which on a categorical scatter summarises the category instead of
+     *   showing one arbitrary point from it. `selectedXValue` plays no part in `'median'` mode.
+     * @param {boolean} [graphConfig.keepSeriesColumn] - Forces the Series column to render even
+     *   when every categorical row repeats one series name (see the collapse in `_drawTableContent`).
      * @param {Object} globalSettings - Runtime interaction state.
      * @param {boolean} globalSettings.showUnifiedTable - Feature flag; `false` suppresses the table entirely.
      * @param {number|Date|null} globalSettings.selectedXValue - X position from a mouse hover/click event.
@@ -133,7 +153,8 @@ export class UnifiedTableRenderer {
      * @param {number} dimensions.width - Inner chart width (excluding margins).
      * @param {number} dimensions.height - Inner chart height (excluding margins).
      * @param {Object} dimensions.margin - `{ top, right, bottom, left }` margin pixel values.
-     * @returns {void}
+     * @returns {number} The table's rendered width in px (0 when the table is suppressed), for
+     *   callers that place content to its right.
      */
     static drawUnifiedTable(
         svg,
@@ -149,7 +170,7 @@ export class UnifiedTableRenderer {
         const { seriesColorScale } = scales;
 
         if (!showUnifiedTable || !seriesInfo || seriesInfo.length === 0) {
-            return;
+            return 0;
         }
 
         debugLog('[UnifiedTableRenderer.drawUnifiedTable] Start of method', 
@@ -187,8 +208,11 @@ export class UnifiedTableRenderer {
             .attr('class', 'unified-table-group')
             .attr('transform', `translate(${tableX}, ${tableY})`);
 
-        // Draw the table
-        this._drawTableContent(tableGroup, rowData, seriesInfo, seriesColorScale, graphConfig);
+        // Draw the table, and hand back the width it actually came out at. Callers that
+        // place something to the RIGHT of this table (BiasTableRenderer) otherwise have to
+        // guess it — and a guess goes wrong the moment a column auto-fits differently or
+        // the Series column collapses away.
+        return this._drawTableContent(tableGroup, rowData, seriesInfo, seriesColorScale, graphConfig);
     }
 
     /**
@@ -257,6 +281,12 @@ export class UnifiedTableRenderer {
 
         const rows = [];
 
+        // `unifiedValueMode: 'median'` replaces the at-x lookup with a per-row median over
+        // that row's own data (see _medianOf). The x position then plays no part in any
+        // value shown, so the header states the sample the medians are taken over instead
+        // of an x that no longer means anything.
+        const useMedian = graphConfig.unifiedValueMode === 'median';
+
         // X values arrive as Dates on time axes, but targetX is coerced to a
         // number (epoch ms) for bisection — restore the Date so the header
         // formats as a date instead of e.g. "1756710000000.00".
@@ -266,10 +296,12 @@ export class UnifiedTableRenderer {
         // Header row with X value
         rows.push({
             type: 'header',
-            label: graphConfig.xAxisLabel || xCol,
-            value: xIsDate && typeof targetX === 'number' && isFinite(targetX)
-                ? new Date(targetX)
-                : targetX,
+            label: useMedian ? 'Across' : (graphConfig.xAxisLabel || xCol),
+            value: useMedian
+                ? `all ${sortedData.length} reports`
+                : (xIsDate && typeof targetX === 'number' && isFinite(targetX)
+                    ? new Date(targetX)
+                    : targetX),
             color: '#333'
         });
         
@@ -323,10 +355,12 @@ export class UnifiedTableRenderer {
                         (colorValue === null || !colorColumn ||
                             SymbolFactory.normalizeCategory(d[colorColumn]) === colorValue)
                     );
-                    rows.push(this._newFunction(
+                    const row = this._newFunction(
                         targetX, filteredData, xCol, yCol, series,
                         this._categoryLabel(symbolValue), this._categoryLabel(colorValue), color, symbolType
-                    ));
+                    );
+                    if (useMedian) row.value = this._medianOf(filteredData, yCol);
+                    rows.push(row);
                 });
             } else if (series.graphType === 'scatter' && uniqueValues.length > 0 && symbolMap) {
                 // ── Categorical scatter: one sub-row per unique filter value ──────────
@@ -336,17 +370,19 @@ export class UnifiedTableRenderer {
                 uniqueValues.forEach(uniqueVal => {
                     const filteredData = sortedData.filter(d =>
                         SymbolFactory.normalizeCategory(d[filterColumn]) === uniqueVal);
-                    rows.push(this._newFunction(
+                    const row = this._newFunction(
                         targetX, filteredData, xCol, yCol, series,
                         this._categoryLabel(uniqueVal), null, seriesColor,
                         SymbolFactory.getSymbol(uniqueVal, symbolMap)
-                    ));
+                    );
+                    if (useMedian) row.value = this._medianOf(filteredData, yCol);
+                    rows.push(row);
                 });
             } else {
                 // ── Standard series: single row, full-dataset value lookup ────────────
                 let foundVal = null;
 
-                if (targetX !== null && targetX !== undefined) {
+                if (targetX !== null && targetX !== undefined && !useMedian) {
                     const i = bisectDate(sortedData, targetX, 1);
                     let scanIdx = Math.min(i, sortedData.length - 1);
 
@@ -368,7 +404,9 @@ export class UnifiedTableRenderer {
                 rows.push({
                     type: 'series',
                     label: series.titleName || yCol,
-                    value: foundVal !== null ? foundVal : 'N/A',
+                    value: useMedian
+                        ? this._medianOf(sortedData, yCol)
+                        : (foundVal !== null ? foundVal : 'N/A'),
                     color: seriesColor,
                     graphType: series.graphType || 'scatter',
                     lineStyle: series.lineStyle || 'solid',
@@ -399,6 +437,37 @@ export class UnifiedTableRenderer {
      * @param {Object} symbolType - Pre-resolved D3 symbol type for this row.
      * @returns {Object} A `'series'` row descriptor for `_drawTableContent`.
      */
+    /**
+     * Median of a column over the given rows, ignoring non-numeric cells.
+     *
+     * This is the value the table shows in `unifiedValueMode: 'median'`. The default mode
+     * answers "what did the LAST report at or below the selected x say" — one raw data
+     * point, which on a dense categorical scatter is noise rather than a summary. The
+     * median answers "what does this category typically do", which is the number a reader
+     * actually wants beside a category's own marker.
+     *
+     * Median rather than mean on purpose: these are metallurgical percentages with long
+     * upper tails (a single 40% mass pull would drag a mean well off the body of the data).
+     *
+     * @private
+     * @param {Array<Object>} rows - Rows already scoped to one category (or the full set).
+     * @param {string} yCol - Column to summarise.
+     * @returns {number|'N/A'} The median, or `'N/A'` when the column has no numeric values.
+     */
+    static _medianOf(rows, yCol) {
+        const vals = [];
+        for (const d of rows ?? []) {
+            const v = d?.[yCol];
+            if (v === null || v === undefined || v === '') continue;
+            const n = +v;
+            if (!isNaN(n)) vals.push(n);
+        }
+        if (vals.length === 0) return 'N/A';
+        vals.sort((a, b) => a - b);
+        const mid = vals.length >> 1;
+        return vals.length % 2 ? vals[mid] : (vals[mid - 1] + vals[mid]) / 2;
+    }
+
     /**
      * Maps a raw category value to its display label, rendering the shared missing-category
      * sentinel as the human-readable `(none)`. Returns `null`/`undefined` unchanged so callers
@@ -599,8 +668,8 @@ export class UnifiedTableRenderer {
      * @param {d3.ScaleOrdinal} seriesColorScale - Ordinal colour scale (unused here; colours are
      *   pre-resolved in `_prepareRowData` and stored on each row descriptor).
      * @param {Object} graphConfig - Graph configuration; inspected for `dualUnits`, `fromUnits`,
-     *   `toUnits`, `scaleFactor`, and `yAxisLabel`.
-     * @returns {void}
+     *   `toUnits`, `scaleFactor`, `yAxisLabel`, `unifiedValueMode` and `keepSeriesColumn`.
+     * @returns {number} The table's total rendered width in px.
      */
     static _drawTableContent(group, rowData, seriesInfo, seriesColorScale, graphConfig) {
         group.selectAll('*').remove();
@@ -646,6 +715,23 @@ export class UnifiedTableRenderer {
         const filterHeader = this._firstColumnName(graphConfig, 'filterColumn') || 'Filter';
         const colorHeader = this._firstColumnName(graphConfig, 'colorGrading') || 'Color';
 
+        // Same argument as the Filter/Colour collapse above, one column further left. On a
+        // chart whose only categorical series is expanded per category, EVERY category row
+        // repeats the one series name — "PbFlotStMP" printed once per deposit type — beside
+        // the column carrying the actual information. That name is already the y-axis label,
+        // so the column is pure repetition and the categories move into its place. Rows that
+        // carry no category (a plotted advice line, a trend series) keep their own label
+        // there, so nothing ends up unlabelled. Only collapses when the repetition is real:
+        // two differently-named series put their names back in their own column.
+        // `keepSeriesColumn: true` on the graph config opts out.
+        const categoryRowLabels = new Set(
+            rowData.filter(r => r.type === 'series' && r.filterLabel).map(r => r.label)
+        );
+        const collapseNameColumn = hasFilterCol && categoryRowLabels.size === 1
+            && !graphConfig.keepSeriesColumn;
+        // What the (possibly merged) category column actually prints for a row.
+        const categoryText = row => (collapseNameColumn ? (row.filterLabel || row.label) : row.filterLabel);
+
         const fit = (accessor, opts) => rows => this.fitToContent(rows, accessor, opts);
 
         const columns = [
@@ -653,9 +739,9 @@ export class UnifiedTableRenderer {
             // Auto-fit the text columns to their content (header included), clamped so a long
             // value can't blow out the table. Swap any of these back to a fixed number if a
             // stable column width is preferred.
-            { key: 'name',   width: fit(r => r.label,       { min: 80, max: 220, header: 'Series' }),     show: true },
-            { key: 'filter', width: fit(r => r.filterLabel, { min: 60, max: 200, header: filterHeader }), show: hasFilterCol },
-            { key: 'color',  width: fit(r => r.colorLabel,  { min: 60, max: 200, header: colorHeader }),  show: hasColorCol },
+            { key: 'name',   width: fit(r => r.label,      { min: 80, max: 220, header: 'Series' }),      show: !collapseNameColumn },
+            { key: 'filter', width: fit(categoryText,      { min: 60, max: 200, header: filterHeader }),  show: hasFilterCol },
+            { key: 'color',  width: fit(r => r.colorLabel, { min: 60, max: 200, header: colorHeader }),   show: hasColorCol },
             { key: 'value',  width: 90, show: showValues },
             { key: 'value2', width: 90, show: showValues && !!graphConfig.dualUnits },
         ].filter(c => c.show);
@@ -726,7 +812,7 @@ export class UnifiedTableRenderer {
             .text(truncate ? this._truncateText(txt, colChars(key)) : txt);
 
         // Marker column header is intentionally blank.
-        headerText('name', 'Series');
+        if (!collapseNameColumn) headerText('name', 'Series');
         if (hasFilterCol) headerText('filter', filterHeader);
         if (hasColorCol)  headerText('color', colorHeader);
 
@@ -742,7 +828,10 @@ export class UnifiedTableRenderer {
                     : ''
                 ;
 
-            headerText('value', `Value${labelUnits}`, false);
+            // In median mode the column is no longer "the value at the selected x" — say so,
+            // or a reader has no way to tell the two apart.
+            const valueHeading = graphConfig.unifiedValueMode === 'median' ? 'Median' : 'Value';
+            headerText('value', `${valueHeading}${labelUnits}`, false);
 
             // Converted-units header — only rendered when dual-unit mode is active.
             if (graphConfig.dualUnits) {
@@ -872,14 +961,17 @@ export class UnifiedTableRenderer {
 
             // ── Series label (name column) ────────────────────────────────────────────
             // Truncation length is derived from the resolved column width, so it adapts when
-            // the column auto-fits to content.
-            group.append('text')
-                .attr('x', colX('name'))
-                .attr('y', rowY)
-                .style('font-family', 'sans-serif')
-                .style('font-size', '9px')
-                .style('fill', '#333')
-                .text(this._truncateText(row.label, colChars('name')));
+            // the column auto-fits to content. Absent entirely when the column collapsed into
+            // the category column — the label is drawn there instead, by categoryCell.
+            if (!collapseNameColumn) {
+                group.append('text')
+                    .attr('x', colX('name'))
+                    .attr('y', rowY)
+                    .style('font-family', 'sans-serif')
+                    .style('font-size', '9px')
+                    .style('fill', '#333')
+                    .text(this._truncateText(row.label, colChars('name')));
+            }
 
             // ── Filter / Color category columns ───────────────────────────────────────
             // The (none) group is rendered in muted italic to read as "absent".
@@ -895,7 +987,7 @@ export class UnifiedTableRenderer {
                     .style('fill', isNone ? '#94a3b8' : '#475569')
                     .text(this._truncateText(text, colChars(key)));
             };
-            if (hasFilterCol) categoryCell('filter', row.filterLabel);
+            if (hasFilterCol) categoryCell('filter', categoryText(row));
             if (hasColorCol)  categoryCell('color', row.colorLabel);
 
             // ── Primary value column ──────────────────────────────────────────────────
@@ -937,6 +1029,8 @@ export class UnifiedTableRenderer {
         // Now that all rows have been drawn and `currentY` is final, size the background rect.
         bg.attr('width', totalWidth)
             .attr('height', currentY + 5);
+
+        return totalWidth;
     }
 
     /**

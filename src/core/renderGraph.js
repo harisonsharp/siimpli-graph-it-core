@@ -17,6 +17,7 @@ import { debugLog, debugWarn } from '../utils/debug.js';
 import { LegendRenderer } from '../rendering/LegendRenderer.js';
 import { UnifiedTableRenderer } from '../rendering/UnifiedTableRenderer.js';
 import { BiasTableRenderer } from '../rendering/BiasTableRenderer.js';
+import { alignFooterTables } from '../rendering/tableLayout.js';
 import { BaseChartRenderer } from '../rendering/ChartRenderers/BaseChartRenderer.js';
 
 /**
@@ -148,6 +149,32 @@ function renderTitle(svg, config, columnInfo, settings, dimensions) {
     renderProjectName(svg, config, dimensions, title);
 }
 
+/**
+ * Nudge a centred label back inside the canvas if it starts left of x=0.
+ *
+ * A label centred on the plot is drawn from `centerX - width/2`, so once it is wider than
+ * twice `centerX` its left end goes NEGATIVE — and that part is simply gone. Nothing can
+ * scroll left of the SVG origin, and CanvasSizer only ever grows the canvas right and down,
+ * so unlike a right-hand overrun this loss is unrecoverable. Shifting the label right makes
+ * it overrun to the right instead, which the canvas does expand to cover.
+ *
+ * Measured, not estimated, because a character-width guess is wrong by ~2x in either
+ * direction depending on the face (see the headless getBoundingClientRect shim). Skipped
+ * entirely where the platform cannot measure: no getBBox means no change, never a guess.
+ *
+ * @param {d3.Selection} textEl - The already-appended text element.
+ * @param {number} [pad] - Minimum left margin to leave, in px.
+ */
+function keepInsideLeftEdge(textEl, pad = 10) {
+    const node = typeof textEl.node === 'function' ? textEl.node() : null;
+    if (!node || typeof node.getBBox !== 'function') return;
+    let box;
+    try { box = node.getBBox(); } catch { return; }
+    if (!box || !box.width || box.x >= pad) return;
+    const x = parseFloat(textEl.attr('x')) || 0;
+    textEl.attr('x', x + (pad - box.x));
+}
+
 function renderProjectName(svg, config, dimensions, title) {
     const centerX = dimensions.margin.left + dimensions.width / 2;
     const projectName = (config.projectName || '').trim();
@@ -156,7 +183,7 @@ function renderProjectName(svg, config, dimensions, title) {
     const hasSubtitle = subtitle.length > 0;
 
     if (hasProjectName) {
-        svg.append('text')
+        keepInsideLeftEdge(svg.append('text')
             .attr('x', centerX)
             .attr('y', 30)
             .attr('text-anchor', 'middle')
@@ -165,11 +192,11 @@ function renderProjectName(svg, config, dimensions, title) {
             .style('font-size', '28px')
             .style('font-weight', 'bold')
             .style('fill', '#333')
-            .text(projectName);
+            .text(projectName));
     }
 
     if (hasSubtitle) {
-        svg.append('text')
+        keepInsideLeftEdge(svg.append('text')
             .attr('x', centerX)
             .attr('y', hasProjectName ? 55 : 30)
             .attr('text-anchor', 'middle')
@@ -178,12 +205,12 @@ function renderProjectName(svg, config, dimensions, title) {
             .style('font-size', '16px')
             .style('font-weight', 'normal')
             .style('fill', '#555')
-            .text(subtitle);
+            .text(subtitle));
     }
 
     const titleY = hasProjectName ? (hasSubtitle ? 78 : 55) : (hasSubtitle ? 55 : 30);
 
-    svg.append('text')
+    keepInsideLeftEdge(svg.append('text')
         .attr('x', centerX)
         .attr('y', titleY)
         .attr('text-anchor', 'middle')
@@ -192,7 +219,7 @@ function renderProjectName(svg, config, dimensions, title) {
         .style('font-size', '20px')
         .style('font-weight', hasProjectName || hasSubtitle ? 'normal' : 'bold')
         .style('fill', hasProjectName || hasSubtitle ? '#444' : '#333')
-        .text(title);
+        .text(title));
 }
 
 /**
@@ -637,14 +664,28 @@ export function renderGraph({
         }
 
         if (globalSettings.showUnifiedTable && globalSettings.showStaticTable) {
-            UnifiedTableRenderer.drawUnifiedTable(
+            // The legend table auto-fits its text columns, so its width is only known after
+            // it draws — hence the measurement rather than the 365px constant this used to
+            // pass, which overlapped the bias table by ~15px on charts carrying 10+
+            // categories and left a gap on charts carrying few.
+            const unifiedTableWidth = UnifiedTableRenderer.drawUnifiedTable(
                 svg, validData, columnInfo, scales, targetGraphConfig, globalSettings, dimensions
             );
 
             if (globalSettings.showBiasTable && globalSettings.biasTableData) {
                 BiasTableRenderer.drawBiasTable(
-                    svg, globalSettings.biasTableData, dimensions, globalSettings, 365
+                    svg, globalSettings.biasTableData, dimensions, globalSettings,
+                    unifiedTableWidth > 0 ? unifiedTableWidth : 365
                 );
+
+                // Both tables are drawn from the same top edge but hold different amounts
+                // of content, so they finish on different lines — a ragged bottom that
+                // reads as a misalignment rather than as two panels of one footer. Sit
+                // them on a shared baseline instead: the tallest keeps the top it was
+                // drawn at (so nothing moves up into the axis title) and the shorter one
+                // drops to meet it, which leaves the pair's overall extent unchanged for
+                // the canvas sizing that runs after this.
+                alignFooterTables(typeof svg.node === 'function' ? svg.node() : svg);
             }
         } else {
             renderLegends(

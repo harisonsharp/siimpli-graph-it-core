@@ -49,6 +49,7 @@ export * from './rendering/DataTableRenderer.js';
 export * from './rendering/LegendRenderer.js';
 export * from './rendering/UnifiedTableRenderer.js';
 export * from './rendering/BiasTableRenderer.js';
+export * from './rendering/tableLayout.js';
 export * from './rendering/LogoRenderer.js';
 export * from './rendering/AnnotationRenderer.js';
 
