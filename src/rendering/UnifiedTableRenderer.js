@@ -30,6 +30,7 @@ import { debugLog } from '../utils/debug.js';
 import { CanvasSizer } from '../services/CanvasSizer.js';
 import { parseColumnId} from '../utils/columnUtils.js';
 import { getDistinctSeriesColors } from '../utils/colorUtils.js';
+import { fitCategoryLine, fitValueAt, numericCell } from '../utils/categoryFit.js';
 /**
  * Renders a unified table combining legend markers, series names, and values.
  * This provides a single cohesive table instead of separate legend and data table.
@@ -82,6 +83,12 @@ export class UnifiedTableRenderer {
         /** Horizontal breathing room added to every content-fitted column, in px. */
         columnPaddingPx: 12,
     };
+
+    /** Gap between two "Label: value" pairs on the table's title line, in px. */
+    static PAIR_GAP_PX = 18;
+
+    /** Heads the sample-size pair on the title line — how much the whole table rests on. */
+    static SAMPLE_LABEL = 'Across:';
 
     /**
      * Builds a content-fitted column width: the longest displayed string across the given rows,
@@ -139,12 +146,28 @@ export class UnifiedTableRenderer {
      * @param {string} [graphConfig.fromUnits] - Unit label for the primary value column.
      * @param {string} [graphConfig.toUnits] - Unit label for the converted value column.
      * @param {number} [graphConfig.scaleFactor] - Divisor applied to convert primary → secondary units.
-     * @param {'value'|'median'} [graphConfig.unifiedValueMode] - What the value column holds.
-     *   `'value'` (default) is the Y at the selected/most-recent X; `'median'` is each row's own
-     *   median over its data, which on a categorical scatter summarises the category instead of
-     *   showing one arbitrary point from it. `selectedXValue` plays no part in `'median'` mode.
+     * @param {'value'|'median'|'fitAtX'} [graphConfig.unifiedValueMode] - What the value column
+     *   holds. `'value'` (default) is the Y at the selected/most-recent X; `'median'` is each
+     *   row's own median over its data, which on a categorical scatter summarises the category
+     *   instead of showing one arbitrary point from it (`selectedXValue` plays no part);
+     *   `'fitAtX'` fits each category's own line and reads it AT `selectedXValue`, adding a
+     *   column for the fit's shape and one for the rows behind it, and falling back to
+     *   `'median'` when no X is selected.
+     * @param {'linear'|'median'} [graphConfig.unifiedFitForm] - Which form `'fitAtX'` fits;
+     *   mirror the shape of whatever reference line the chart already draws. Default
+     *   `'median'`.
+     * @param {string} [graphConfig.unifiedCategoryHeader] - Heading over the category column,
+     *   in place of the underlying column's name.
+     * @param {{formula?: string, count?: string}} [graphConfig.unifiedColumnHeaders] - Headings
+     *   over the two `'fitAtX'` qualifier columns. Default `'formula'` and `'number of data'`.
+     * @param {Array<'formula'|'count'>} [graphConfig.unifiedFitColumns] - Which of those two
+     *   columns to draw. Omit to draw whichever the rows carry; narrow it where one of them
+     *   would only restate the other (a rolling-median fit's formula IS its row count).
      * @param {boolean} [graphConfig.keepSeriesColumn] - Forces the Series column to render even
      *   when every categorical row repeats one series name (see the collapse in `_drawTableContent`).
+     * @param {string} [graphConfig.unifiedSampleNote] - Parenthetical appended to the sample
+     *   size, e.g. `'LHIR + LOR'` renders `Across: all 39 reports (LHIR + LOR)`. For naming what
+     *   the corpus behind a chart actually IS, where the count alone does not say.
      * @param {Object} globalSettings - Runtime interaction state.
      * @param {boolean} globalSettings.showUnifiedTable - Feature flag; `false` suppresses the table entirely.
      * @param {number|Date|null} globalSettings.selectedXValue - X position from a mouse hover/click event.
@@ -287,21 +310,81 @@ export class UnifiedTableRenderer {
         // of an x that no longer means anything.
         const useMedian = graphConfig.unifiedValueMode === 'median';
 
+        // `unifiedValueMode: 'fitAtX'` answers the question a reader actually arrives with:
+        // not "what does this category do on average", but "what would it do AT MY x". The
+        // raw at-x lookup can't answer that — it returns the last report at or below the x,
+        // one arbitrary point — and a plain median can't either, since it averages across an
+        // x range the reader isn't at. So each category's own line is fitted (categoryFit.js,
+        // the same fit the mineit modal draws) and read at the x. Its shape and its evidence
+        // count travel with the number, in their own columns: a fitted value read off six
+        // reports is a different claim from one read off sixty, and the reader has to be able
+        // to see which they are looking at.
+        //
+        // Without an x — no hover, no selection, a headless PNG — there is no point to read
+        // at, so the column falls back to the plain median and says so in its heading rather
+        // than quietly labelling one number as the other.
+        //
+        // Read off `selectedXValue`, deliberately NOT off `targetX`: the most-recent fallback
+        // above would otherwise stand in for a selection and read every category's fit at the
+        // single highest x on the chart. That is the same "one arbitrary point at the top of
+        // the range" the median mode exists to get away from, and being smooth would not make
+        // it any less arbitrary.
+        const useFitAtX = graphConfig.unifiedValueMode === 'fitAtX';
+        const fitForm = graphConfig.unifiedFitForm === 'linear' ? 'linear' : 'median';
+        const pointX = useFitAtX ? numericCell(selectedXValue) : null;
+        const atPoint = pointX !== null;
+        const summarise = useMedian || (useFitAtX && !atPoint);
+
+        // The fitted line for one category, plus the two facts that qualify it. Shared by
+        // both categorical branches below, which differ only in how they scope their rows.
+        const fitRow = (row, scopedData, yCol) => {
+            const fit = fitCategoryLine(
+                scopedData.map((d, i) => ({ index: i, x: d[xCol], y: d[yCol] })),
+                fitForm
+            );
+            row.formula = fit?.formula ?? '';
+            row.count = fit?.n ?? 0;
+            // Extrapolated on purpose, and the same way the modal extrapolates the line it
+            // draws: a reader asking about a grade past this category's own reports still
+            // gets the answer the line gives there, and `count` is what tells them how much
+            // is behind it.
+            const value = atPoint ? fitValueAt(fit, pointX, { extrapolate: true }) : null;
+            row.value = Number.isFinite(value) ? value : this._medianOf(scopedData, yCol);
+            return row;
+        };
+
         // X values arrive as Dates on time axes, but targetX is coerced to a
         // number (epoch ms) for bisection — restore the Date so the header
         // formats as a date instead of e.g. "1756710000000.00".
         const xIsDate = sortedData.length > 0 &&
             sortedData[sortedData.length - 1][xCol] instanceof Date;
 
-        // Header row with X value
+        // Header row with X value. `atPoint` rides along so the drawing pass can head the
+        // value column with what it is actually holding — the same mode reads out two
+        // different quantities depending on whether an x was selected.
+        //
+        // `sample` is the size of the evidence the whole table rests on. In the modes that
+        // summarise it IS the header pair; reading at a point needs the pair for the point,
+        // so the count moves alongside rather than being dropped — it is the first thing
+        // asked of any of these numbers.
+        // `unifiedSampleNote` qualifies WHAT was counted, not how many — the flotation
+        // advice charts draw on a corpus gated to two report classifications, and the
+        // bare count reads as though it were every report of any kind.
+        const sampleNote = graphConfig.unifiedSampleNote;
+        const sample = `all ${sortedData.length} reports`
+            + (sampleNote ? ` (${sampleNote})` : '');
         rows.push({
             type: 'header',
-            label: useMedian ? 'Across' : (graphConfig.xAxisLabel || xCol),
-            value: useMedian
-                ? `all ${sortedData.length} reports`
-                : (xIsDate && typeof targetX === 'number' && isFinite(targetX)
-                    ? new Date(targetX)
-                    : targetX),
+            label: summarise ? 'Across' : (useFitAtX ? 'Read at' : (graphConfig.xAxisLabel || xCol)),
+            value: summarise
+                ? sample
+                : useFitAtX
+                    ? pointX
+                    : (xIsDate && typeof targetX === 'number' && isFinite(targetX)
+                        ? new Date(targetX)
+                        : targetX),
+            sample: (useFitAtX && !summarise) ? sample : null,
+            atPoint,
             color: '#333'
         });
         
@@ -360,6 +443,7 @@ export class UnifiedTableRenderer {
                         this._categoryLabel(symbolValue), this._categoryLabel(colorValue), color, symbolType
                     );
                     if (useMedian) row.value = this._medianOf(filteredData, yCol);
+                    else if (useFitAtX) fitRow(row, filteredData, yCol);
                     rows.push(row);
                 });
             } else if (series.graphType === 'scatter' && uniqueValues.length > 0 && symbolMap) {
@@ -376,13 +460,14 @@ export class UnifiedTableRenderer {
                         SymbolFactory.getSymbol(uniqueVal, symbolMap)
                     );
                     if (useMedian) row.value = this._medianOf(filteredData, yCol);
+                    else if (useFitAtX) fitRow(row, filteredData, yCol);
                     rows.push(row);
                 });
             } else {
                 // ── Standard series: single row, full-dataset value lookup ────────────
                 let foundVal = null;
 
-                if (targetX !== null && targetX !== undefined && !useMedian) {
+                if (targetX !== null && targetX !== undefined && !useMedian && !useFitAtX) {
                     const i = bisectDate(sortedData, targetX, 1);
                     let scanIdx = Math.min(i, sortedData.length - 1);
 
@@ -401,7 +486,7 @@ export class UnifiedTableRenderer {
                     }
                 }
 
-                rows.push({
+                const row = {
                     type: 'series',
                     label: series.titleName || yCol,
                     value: useMedian
@@ -413,7 +498,28 @@ export class UnifiedTableRenderer {
                     strokeWidth: series.strokeWidth || 2,
                     // Non-scatter types don't need a symbol; use circle as the scatter default.
                     symbolType: series.graphType === 'scatter' ? d3.symbolCircle : null
-                });
+                };
+
+                if (useFitAtX) {
+                    // An uncategorised series on a fitAtX chart is a line the categories are
+                    // read against — already a fitted line, plotted per row. Refitting it
+                    // would be fitting a fit, so it is read where it is drawn.
+                    //
+                    // Its two qualifier cells can only be filled in by whoever fitted it.
+                    // Counting its own rows would be wrong for the case this exists for: a
+                    // line fitted on one category's reports but plotted across every row, to
+                    // be readable at any x, would otherwise claim the whole dataset as its
+                    // evidence. So the series may state both, and the row count is only a
+                    // fallback for a series that really is fitted on everything it covers.
+                    row.formula = series.unifiedFormula ?? '';
+                    row.count = Number.isFinite(series.unifiedCount)
+                        ? series.unifiedCount
+                        : this._numericCount(sortedData, yCol);
+                    const value = atPoint ? this._plottedValueAt(sortedData, xCol, yCol, pointX) : null;
+                    row.value = Number.isFinite(value) ? value : this._medianOf(sortedData, yCol);
+                }
+
+                rows.push(row);
             }
         });
 
@@ -466,6 +572,86 @@ export class UnifiedTableRenderer {
         vals.sort((a, b) => a - b);
         const mid = vals.length >> 1;
         return vals.length % 2 ? vals[mid] : (vals[mid - 1] + vals[mid]) / 2;
+    }
+
+    /**
+     * The heading over the value column, which has to name the quantity the column is
+     * actually holding — the three modes put three different things there, and a reader
+     * comparing two charts has nothing else to tell them apart.
+     *
+     * `'fitAtX'` alone is not enough to decide: with no x selected that mode falls back to a
+     * plain median (see `_prepareRowData`), so the header row's `atPoint` flag settles it.
+     *
+     * @private
+     * @param {Array<Object>} rowData - Prepared rows; the header row carries `atPoint`.
+     * @param {Object} graphConfig - Graph configuration.
+     * @returns {string} The heading, with the y-axis units appended when it has any.
+     */
+    static _valueHeader(rowData, graphConfig) {
+        // Parenthesised units from the Y-axis label, e.g. "Gold Price (USD/oz)" → "USD/oz".
+        const yAxisLabel = graphConfig.yAxisLabel || '';
+        const labelUnits = graphConfig.dualUnits
+            ? `, ${graphConfig.fromUnits}`
+            : (yAxisLabel.match(/\((.*?)\)/) ? `, ${yAxisLabel.match(/\((.*?)\)/)[1]}` : '');
+
+        const atPoint = rowData.some(r => r.type === 'header' && r.atPoint);
+        const heading = graphConfig.unifiedValueMode === 'median' ? 'Median'
+            : graphConfig.unifiedValueMode === 'fitAtX' ? (atPoint ? 'Median at point' : 'Median')
+                : 'Value';
+        return `${heading}${labelUnits}`;
+    }
+
+    /**
+     * How many of these rows carry a usable number in a column — the "number of data" behind
+     * whatever that column's summary says.
+     *
+     * @private
+     * @param {Array<Object>} rows - Rows to count over.
+     * @param {string} yCol - Column that has to be numeric.
+     * @returns {number} The count.
+     */
+    static _numericCount(rows, yCol) {
+        let n = 0;
+        for (const d of rows ?? []) {
+            if (numericCell(d?.[yCol]) !== null) n++;
+        }
+        return n;
+    }
+
+    /**
+     * Reads a PLOTTED series at an x, interpolating between the two rows either side of it.
+     *
+     * For a series that is already a per-row model — a rolling median or a fitted line
+     * computed upstream and carried as a column — this is the value the chart draws at that
+     * x, so a table cell and the line agree by construction. Past either end it holds the end
+     * value: the series says nothing out there, and inventing a slope for it would.
+     *
+     * @private
+     * @param {Array<Object>} rows - Rows sorted ascending by `xCol`.
+     * @param {string} xCol - X column.
+     * @param {string} yCol - The plotted series' column.
+     * @param {number} x - Where to read it.
+     * @returns {number|null} The value, or `null` when the series has no numeric rows.
+     */
+    static _plottedValueAt(rows, xCol, yCol, x) {
+        const pts = [];
+        for (const d of rows ?? []) {
+            const xv = numericCell(d?.[xCol]);
+            const yv = numericCell(d?.[yCol]);
+            if (xv !== null && yv !== null) pts.push({ x: xv, y: yv });
+        }
+        if (pts.length === 0) return null;
+        pts.sort((a, b) => a.x - b.x);
+        if (x <= pts[0].x) return pts[0].y;
+        if (x >= pts[pts.length - 1].x) return pts[pts.length - 1].y;
+        for (let i = 1; i < pts.length; i++) {
+            const prev = pts[i - 1];
+            const next = pts[i];
+            if (x > next.x) continue;
+            if (next.x === prev.x) return next.y;
+            return prev.y + (next.y - prev.y) * ((x - prev.x) / (next.x - prev.x));
+        }
+        return pts[pts.length - 1].y;
     }
 
     /**
@@ -711,8 +897,11 @@ export class UnifiedTableRenderer {
             && !(sameCategoryColumn && hasFilterCol);
 
         // Header text for the two category columns: the underlying column names from the first
-        // series that defines them, falling back to generic labels.
-        const filterHeader = this._firstColumnName(graphConfig, 'filterColumn') || 'Filter';
+        // series that defines them, falling back to generic labels. `unifiedCategoryHeader`
+        // overrides the first — a column NAME is a variable ('DepositCode'), and the heading a
+        // reader wants over a list of them is what they are ('Deposit type').
+        const filterHeader = graphConfig.unifiedCategoryHeader
+            || this._firstColumnName(graphConfig, 'filterColumn') || 'Filter';
         const colorHeader = this._firstColumnName(graphConfig, 'colorGrading') || 'Color';
 
         // Same argument as the Filter/Colour collapse above, one column further left. On a
@@ -734,6 +923,31 @@ export class UnifiedTableRenderer {
 
         const fit = (accessor, opts) => rows => this.fitToContent(rows, accessor, opts);
 
+        // The value column's heading, resolved before the column model so the column can be
+        // made wide enough to hold it. It used to be assumed to fit inside a flat 90px, which
+        // was true of 'Value' and stopped being true the moment a mode described itself.
+        const valueHeader = showValues ? this._valueHeader(rowData, graphConfig) : '';
+        const value2Header = showValues && graphConfig.dualUnits ? `Value, ${graphConfig.toUnits}` : '';
+
+        // What a fitted value is and how much sits behind it — see the `fitAtX` note in
+        // _prepareRowData. Present only when some row actually carries them, so every other
+        // chart's table is untouched.
+        //
+        // `unifiedFitColumns` narrows that further, because neither column is worth its width
+        // on every chart. A rolling-median fit's formula is its window, and the window is
+        // derived from the row count — so beside a count column it repeats its neighbour,
+        // where a least-squares slope beside the same count does not. Omit the key to show
+        // whichever columns the rows carry.
+        const allowed = graphConfig.unifiedFitColumns;
+        const columnAllowed = key => !Array.isArray(allowed) || allowed.includes(key);
+        const hasFormulaCol = columnAllowed('formula')
+            && rowData.some(r => r.type === 'series' && r.formula);
+        const hasCountCol = columnAllowed('count')
+            && rowData.some(r => r.type === 'series' && Number.isFinite(r.count));
+        const formulaHeader = graphConfig.unifiedColumnHeaders?.formula ?? 'formula';
+        const countHeader = graphConfig.unifiedColumnHeaders?.count ?? 'number of data';
+        const countText = row => (Number.isFinite(row.count) ? `n=${row.count}` : '');
+
         const columns = [
             { key: 'marker', width: 25, show: true },
             // Auto-fit the text columns to their content (header included), clamped so a long
@@ -742,8 +956,10 @@ export class UnifiedTableRenderer {
             { key: 'name',   width: fit(r => r.label,      { min: 80, max: 220, header: 'Series' }),      show: !collapseNameColumn },
             { key: 'filter', width: fit(categoryText,      { min: 60, max: 200, header: filterHeader }),  show: hasFilterCol },
             { key: 'color',  width: fit(r => r.colorLabel, { min: 60, max: 200, header: colorHeader }),   show: hasColorCol },
-            { key: 'value',  width: 90, show: showValues },
-            { key: 'value2', width: 90, show: showValues && !!graphConfig.dualUnits },
+            { key: 'value',  width: fit(() => '', { min: 90, max: 220, header: valueHeader }),            show: showValues },
+            { key: 'value2', width: fit(() => '', { min: 90, max: 220, header: value2Header }),           show: showValues && !!graphConfig.dualUnits },
+            { key: 'formula', width: fit(r => r.formula,   { min: 70, max: 200, header: formulaHeader }), show: hasFormulaCol },
+            { key: 'count',   width: fit(countText,        { min: 60, max: 160, header: countHeader }),   show: hasCountCol },
         ].filter(c => c.show);
 
         // Accumulate left edges (inside the 10 px left padding), resolving each width spec.
@@ -765,7 +981,24 @@ export class UnifiedTableRenderer {
         );
 
         // +10 trailing padding to mirror the 10 px leading padding.
-        const totalWidth = acc + 10;
+        //
+        // The header line is content too. Its second pair (the sample size — see the header
+        // row in `_prepareRowData`) hangs off the table's RIGHT edge, over the count column
+        // it is a count for, because the strip between the title and the value column is
+        // whatever the category column's width leaves and is routinely too narrow to hold it.
+        // Where the columns alone do not reach far enough, the table widens rather than the
+        // pair being dropped.
+        const { charPx: headerCharPx } = UnifiedTableRenderer.LAYOUT;
+        const headerRow = rowData.find(r => r.type === 'header');
+        const sampleText = showValues && headerRow?.sample ? String(headerRow.sample) : '';
+        const sampleWidth = sampleText
+            ? (UnifiedTableRenderer.SAMPLE_LABEL.length + sampleText.length) * headerCharPx + 8
+            : 0;
+        const valueEndX = colX('value') + colW('value') - 2;
+        const totalWidth = Math.max(
+            acc + 10,
+            sampleWidth ? valueEndX + UnifiedTableRenderer.PAIR_GAP_PX + sampleWidth + 10 : 0
+        );
 
         // ── Background rect ───────────────────────────────────────────────────────────
         // Appended first so it renders behind all text, but sized at the end once the
@@ -817,27 +1050,15 @@ export class UnifiedTableRenderer {
         if (hasColorCol)  headerText('color', colorHeader);
 
         if (showValues){
-            // Extract parenthesised units from the Y-axis label, e.g. "Gold Price (USD/oz)" → "USD/oz".
-            const isLabelUnits = graphConfig.yAxisLabel.match(/\((.*?)\)/)
-                ? true
-                : false;
-            const labelUnits = graphConfig.dualUnits
-                ? `, ${graphConfig.fromUnits}`
-                : isLabelUnits
-                    ? `, ${graphConfig.yAxisLabel.match(/\((.*?)\)/)?.[1]}`
-                    : ''
-                ;
-
-            // In median mode the column is no longer "the value at the selected x" — say so,
-            // or a reader has no way to tell the two apart.
-            const valueHeading = graphConfig.unifiedValueMode === 'median' ? 'Median' : 'Value';
-            headerText('value', `${valueHeading}${labelUnits}`, false);
+            headerText('value', valueHeader, false);
 
             // Converted-units header — only rendered when dual-unit mode is active.
             if (graphConfig.dualUnits) {
-                headerText('value2', `Value, ${graphConfig.toUnits}`, false);
+                headerText('value2', value2Header, false);
             }
         }
+        if (hasFormulaCol) headerText('formula', formulaHeader);
+        if (hasCountCol) headerText('count', countHeader);
 
         currentY += 15;
 
@@ -881,34 +1102,40 @@ export class UnifiedTableRenderer {
                     // would reach back into the title, so a long x-axis label (e.g.
                     // "Gold Grade in Concentrate (g/t):") can't overprint the value or title.
                     const { charPx } = UnifiedTableRenderer.LAYOUT;
-                    const valueEndX = colX('value') + colW('value') - 2;
-                    const labelEndX = valueEndX - String(xValueFormatted).length * charPx - 8;
                     const titleClearanceX = 60; // right edge of the bold "Legend" title, plus a gap
-                    const labelChars = Math.max(
-                        1,
-                        Math.floor((labelEndX - titleClearanceX) / charPx)
-                    );
 
-                    group.append('text')
-                        .attr('x', labelEndX)
-                        .attr('y', 12)
-                        .attr('text-anchor', 'end')
-                        .style('font-family', 'sans-serif')
-                        .style('font-size', '9px')
-                        .style('font-weight', 'bold')
-                        .style('fill', '#333')
-                        .text(this._truncateText(headerLabel, labelChars));
+                    // Draws one right-aligned "Label: value" pair ending at `endX`. The label
+                    // grows leftward and truncates only if it would reach back into the
+                    // title, so a long x-axis label (e.g. "Gold Grade in Concentrate (g/t):")
+                    // can't overprint the value or the title.
+                    const headerPair = (label, value, endX) => {
+                        const text = String(value);
+                        const labelEndX = endX - text.length * charPx - 8;
+                        const chars = Math.max(1, Math.floor((labelEndX - titleClearanceX) / charPx));
 
-                    group.append('text')
-                        .attr('x', valueEndX)
-                        .attr('y', 12)
-                        .attr('text-anchor', 'end')
-                        .style('font-family', 'sans-serif')
-                        .style('font-size', '9px')
-                        .style('font-weight', 'bold')
-                        .style('fill', '#333')
-                        .text(xValueFormatted);
+                        for (const [x, content] of [[labelEndX, this._truncateText(label, chars)],
+                            [endX, text]]) {
+                            group.append('text')
+                                .attr('x', x)
+                                .attr('y', 12)
+                                .attr('text-anchor', 'end')
+                                .style('font-family', 'sans-serif')
+                                .style('font-size', '9px')
+                                .style('font-weight', 'bold')
+                                .style('fill', '#333')
+                                .text(content);
+                        }
+                    };
 
+                    headerPair(headerLabel, xValueFormatted, valueEndX);
+
+                    // And, at the far right, how many reports the whole table rests on — see
+                    // the header row in `_prepareRowData`, and `totalWidth` above for why it
+                    // hangs off this edge rather than sitting between the title and the
+                    // value column.
+                    if (sampleText) {
+                        headerPair(UnifiedTableRenderer.SAMPLE_LABEL, sampleText, totalWidth - 10);
+                    }
                 }
                 return;
             }
@@ -1023,6 +1250,23 @@ export class UnifiedTableRenderer {
                         .text(valueFormattedConverted);
                 }
             }
+
+            // ── What the value is, and how much is behind it ──────────────────────────
+            // Muted, not bold: these qualify the value beside them rather than competing
+            // with it for the eye.
+            const qualifierCell = (key, text) => {
+                if (!text) return;
+                group.append('text')
+                    .attr('x', colX(key))
+                    .attr('y', rowY)
+                    .style('font-family', 'sans-serif')
+                    .style('font-size', '9px')
+                    .style('fill', '#475569')
+                    .text(this._truncateText(text, colChars(key)));
+            };
+            if (hasFormulaCol) qualifierCell('formula', row.formula);
+            if (hasCountCol) qualifierCell('count', countText(row));
+
             currentY += 18;
         });
 
