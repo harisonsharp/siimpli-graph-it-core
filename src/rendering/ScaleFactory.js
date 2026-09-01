@@ -368,7 +368,28 @@ export class ScaleFactory {
 
             // Create separate scales for primary and secondary axes
             const primaryYScale = this.createYScale('primary', data, primarySeries, height, config, hasBarSeries, xAxisInfo);
-            const secondaryYScale = this.createYScale('secondary', data, secondarySeries, height, config, false, xAxisInfo);
+            let secondaryYScale = this.createYScale('secondary', data, secondarySeries, height, config, false, xAxisInfo);
+
+            // Each axis's own linear scale maps its own [min,max] to the full
+            // [height,0] pixel range independently, so even when a custom intercept
+            // (e.g. "0,0,0") guarantees both domains include their crossing value,
+            // the two crossing points still land on different pixel rows. Re-anchor
+            // the secondary scale's pixel range around the primary's actual crossing
+            // pixel, keeping its domain endpoints pinned to the original [0,height]
+            // extremes — a 3-point piecewise-linear scale, not a uniform rescale.
+            if (config.axisIntercept === 'custom' && config.customIntercept) {
+                const primaryIntercept = Number.parseFloat(config.customIntercept.y);
+                const secondaryIntercept = Number.parseFloat(config.customIntercept.y2);
+                const [sMin, sMax] = secondaryYScale.domain();
+
+                if (Number.isFinite(primaryIntercept) && Number.isFinite(secondaryIntercept) &&
+                    secondaryIntercept > sMin && secondaryIntercept < sMax) {
+                    const primaryZeroPixel = primaryYScale(primaryIntercept);
+                    secondaryYScale = d3.scaleLinear()
+                        .domain([sMin, secondaryIntercept, sMax])
+                        .range([height, primaryZeroPixel, 0]);
+                }
+            }
 
             return {
                 xScale,

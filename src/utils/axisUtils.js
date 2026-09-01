@@ -490,15 +490,22 @@ export const drawAxes = (
     const xAxisPosition = height;
     const yAxisPosition = 0;
 
-    // Handle axis intercepts if configured
+    // Handle axis intercepts if configured.
+    // yAxisX (where the vertical y-axis line sits) and xAxisY (where the horizontal
+    // x-axis line sits) are computed independently: a band/categorical x-scale (bar
+    // charts) has no numeric position to cross at, so yAxisX keeps its band-scale
+    // default in that case — but xAxisY only ever depends on the (always numeric)
+    // primary y-scale, so it must still honor axisIntercept for bar charts too.
+    // Previously these were one if/else-if chain, so any bar chart's band x-scale
+    // short-circuited BOTH computations and always pinned xAxisY to the bottom,
+    // ignoring a configured 'origin'/'custom' intercept entirely.
     let xAxisY = xAxisPosition;
     let yAxisX = yAxisPosition;
+
     if (typeof xScale.paddingOuter === 'function') {
         yAxisX = xScale.paddingOuter() * xScale.bandwidth() * 2;
-    }
-    else if (config.axisIntercept === 'origin') {
+    } else if (config.axisIntercept === 'origin') {
         const xDomain = xScale.domain();
-        const yDomain = primaryYScale.domain();
 
         // On a log axis the domain is log₁₀-transformed, so log-space 0 is the
         // data value 1, not the origin — x=0 doesn't exist on a log scale.
@@ -511,25 +518,29 @@ export const drawAxes = (
                 config.series?.some(s => s.graphType === 'histogram');
             yAxisX = isHistogram ? 0 : Math.max(0, Math.min(width, xScale(0)));
         }
-        if (!config.logY && yDomain[0] <= 0 && yDomain[1] >= 0) {
-            xAxisY = Math.max(0, Math.min(height, primaryYScale(0)));
-        }
     } else if (config.axisIntercept === 'custom' && config.customIntercept) {
         const customXRaw = Number.parseFloat(config.customIntercept.x) || 0;
-        const customYRaw = Number.parseFloat(config.customIntercept.y) || 0;
-
         // Custom intercepts are given in data units; map into log space when
         // the scale domain is log₁₀-transformed (non-positive values have no
         // log-space position, so the axis stays at the edge).
         const customX = config.logX ? (customXRaw > 0 ? Math.log10(customXRaw) : NaN) : customXRaw;
-        const customY = config.logY ? (customYRaw > 0 ? Math.log10(customYRaw) : NaN) : customYRaw;
-
         const xDomain = xScale.domain();
-        const yDomain = primaryYScale.domain();
 
         if (customX >= xDomain[0] && customX <= xDomain[1]) {
             yAxisX = xScale(customX);
         }
+    }
+
+    if (config.axisIntercept === 'origin') {
+        const yDomain = primaryYScale.domain();
+        if (!config.logY && yDomain[0] <= 0 && yDomain[1] >= 0) {
+            xAxisY = Math.max(0, Math.min(height, primaryYScale(0)));
+        }
+    } else if (config.axisIntercept === 'custom' && config.customIntercept) {
+        const customYRaw = Number.parseFloat(config.customIntercept.y) || 0;
+        const customY = config.logY ? (customYRaw > 0 ? Math.log10(customYRaw) : NaN) : customYRaw;
+        const yDomain = primaryYScale.domain();
+
         if (customY >= yDomain[0] && customY <= yDomain[1]) {
             xAxisY = primaryYScale(customY);
         }

@@ -242,7 +242,12 @@ function drawLogoToCanvas(ctx, logoImage, width, height, margin, scale = 1) {
             const aspectRatio = logoImage.naturalHeight / logoImage.naturalWidth;
             const logoHeight = logoTargetWidth * aspectRatio;
             const logoX = usedMargin.left - logoTargetWidth - 20;
-            const logoY = usedMargin.top + graphHeight + 30;
+            // Preferred position sits just below the plot, `30` into the bottom margin band.
+            // That band's actual height (usedMargin.bottom) is a fixed constant unrelated to
+            // this logo's own size, so for a taller-than-expected logo (or a narrow margin)
+            // the preferred position can run past the canvas edge. Clamp so it always keeps
+            // at least 10px of clearance instead of drawing (partly) off-canvas.
+            const logoY = Math.min(usedMargin.top + graphHeight + 30, height - logoHeight - 10);
 
             ctx.save();
             ctx.globalAlpha = 0.8;

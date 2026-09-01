@@ -184,6 +184,10 @@ export class KCSVParser {
             axisIntercept,
             customIntercept,
             secondaryYAxisScale,
+            // calculateDimensions() reserves extra margin.right for a legend based on
+            // series label length; 'top-right' is the position that actually lands in
+            // that reserved space (drawSeriesLegend defaults to 'bottom-left' otherwise).
+            legendPosition: 'top-right',
             series: seriesConfigs.map((s, i) => ({
                 yAxis: s.label,
                 titleName: s.label,
