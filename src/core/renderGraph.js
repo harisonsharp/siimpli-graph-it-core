@@ -56,7 +56,15 @@ function parseColumnInformation(config) {
 function calculateDimensions(settings, columnInfo, graphConfig) {
     let rightMargin = 60; // Base spacing
 
-    if (columnInfo && columnInfo.seriesInfo) {
+    // 'top-right' / 'bottom-right' legends (LegendRenderer.drawSeriesLegend) are
+    // positioned relative to the raw canvas width, not inside this margin — only
+    // the default 'bottom-left' legend actually renders inside the reserved strip.
+    // Inflating margin.right by label length for a right-positioned legend just
+    // squishes the plot for no benefit, since the legend doesn't use that space.
+    const legendPosition = graphConfig.legendPosition || 'bottom-left';
+    const legendUsesRightMargin = legendPosition === 'bottom-left';
+
+    if (legendUsesRightMargin && columnInfo && columnInfo.seriesInfo) {
         const longestLabel = columnInfo.seriesInfo.reduce((max, series) => {
             const label = series.yAxisInfo.columnName || '';
             return label.length > max.length ? label : max;

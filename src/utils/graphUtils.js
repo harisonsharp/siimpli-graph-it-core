@@ -238,20 +238,27 @@ function drawLogoToCanvas(ctx, logoImage, width, height, margin, scale = 1) {
             };
 
             const graphHeight = height - usedMargin.top - usedMargin.bottom;
-            const logoTargetWidth = 60 * scale;
+            const gap = 30 * scale;
             const aspectRatio = logoImage.naturalHeight / logoImage.naturalWidth;
-            const logoHeight = logoTargetWidth * aspectRatio;
+
+            // Room available below the plot, in the bottom margin, after the gap.
+            // A logo whose natural aspect ratio is taller than ~1.17:1 (relative to
+            // the default 60px target width) would push past the canvas edge and get
+            // silently clipped when rasterized — shrink it to fit instead.
+            const availableHeight = usedMargin.bottom - gap;
+            let logoTargetWidth = 60 * scale;
+            let logoHeight = logoTargetWidth * aspectRatio;
+            if (availableHeight > 0 && logoHeight > availableHeight) {
+                logoHeight = availableHeight;
+                logoTargetWidth = logoHeight / aspectRatio;
+            }
+
             const logoX = usedMargin.left - logoTargetWidth - 20;
-            // Preferred position sits just below the plot, `30` into the bottom margin band.
-            // That band's actual height (usedMargin.bottom) is a fixed constant unrelated to
-            // this logo's own size, so for a taller-than-expected logo (or a narrow margin)
-            // the preferred position can run past the canvas edge. Clamp so it always keeps
-            // at least 10px of clearance instead of drawing (partly) off-canvas.
-            const logoY = Math.min(usedMargin.top + graphHeight + 30, height - logoHeight - 10);
+            const logoY = usedMargin.top + graphHeight + gap;
 
             ctx.save();
             ctx.globalAlpha = 0.8;
-            if (logoX >= 0 && logoY >= 0) {
+            if (logoX >= 0 && logoY >= 0 && logoY + logoHeight <= height) {
                 ctx.drawImage(logoImage, logoX, logoY, logoTargetWidth, logoHeight);
             }
             ctx.restore();

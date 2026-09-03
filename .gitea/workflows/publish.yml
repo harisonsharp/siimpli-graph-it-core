@@ -1,0 +1,58 @@
+# Ported from .github/workflows/publish.yml as part of the migration to
+# self-hosted Gitea. Two things changed from the GitHub version:
+#   1. Publishes to Gitea's own npm-compatible package registry instead of
+#      GitHub Packages (see package.json's publishConfig.registry).
+#   2. The cascade step no longer uses actions/github-script + the GitHub
+#      REST API (Gitea-incompatible) — it calls Gitea's dispatch API
+#      directly via curl. Target names fixed while migrating: the old list
+#      dispatched to 'siimpli-graph-it' (a deprecated/stray repo — use
+#      siimpli-graph-it-copy) and 'siimpli-mineit'/'siimpli-mi' (neither
+#      matches the actual repo — it's checked out locally as mine_analytics
+#      and its Gitea org repo is named the same, per server/deploy/README-
+#      cicd.md Phase 4 in siimpli-server).
+#
+# <mesh-hostname> and the exact dispatch endpoint shape are placeholders —
+# see server/deploy/README-cicd.md in siimpli-server for the live-instance
+# verification this needs before the first real cutover.
+
+name: Publish Package
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+jobs:
+  publish:
+    runs-on: dell-host
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          registry-url: 'https://<mesh-hostname>:8443/api/packages/siimpli/npm/'
+          scope: '@harisonsharp'
+
+      - run: npm install
+
+      - run: npm publish
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.GITEA_NPM_TOKEN }}
+
+      - name: Cascade — trigger downstream compatibility checks
+        if: success() && github.event_name == 'push'
+        env:
+          GITEA_DISPATCH_TOKEN: ${{ secrets.GITEA_DISPATCH_TOKEN }}
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME}"
+          for repo in siimpli-graph-it-headless siimpli-graph-it-copy mine_analytics; do
+            curl -sf -X POST \
+              -H "Authorization: token ${GITEA_DISPATCH_TOKEN}" \
+              -H "Content-Type: application/json" \
+              "https://<mesh-hostname>:8443/api/v1/repos/siimpli/${repo}/dispatches" \
+              -d "{\"event_type\":\"core-published\",\"client_payload\":{\"core_version\":\"${version}\"}}"
+            echo "Dispatched core-published@${version} -> ${repo}"
+          done

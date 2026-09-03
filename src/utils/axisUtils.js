@@ -492,13 +492,14 @@ export const drawAxes = (
 
     // Handle axis intercepts if configured.
     // yAxisX (where the vertical y-axis line sits) and xAxisY (where the horizontal
-    // x-axis line sits) are computed independently: a band/categorical x-scale (bar
-    // charts) has no numeric position to cross at, so yAxisX keeps its band-scale
-    // default in that case — but xAxisY only ever depends on the (always numeric)
-    // primary y-scale, so it must still honor axisIntercept for bar charts too.
-    // Previously these were one if/else-if chain, so any bar chart's band x-scale
-    // short-circuited BOTH computations and always pinned xAxisY to the bottom,
-    // ignoring a configured 'origin'/'custom' intercept entirely.
+    // x-axis line sits) are computed independently: yAxisX depends on the X scale
+    // (and is meaningless to compute for a band scale, which has no continuous
+    // "position 0"), while xAxisY depends only on the primary Y scale/intercept and
+    // applies regardless of whether X is banded — a bar chart's categorical X axis
+    // has no bearing on where Y=0 should sit. These used to be gated behind the same
+    // if/else-if chain, which silently skipped xAxisY positioning for every band-scale
+    // (bar) chart, pinning the x-axis to the bottom even when axisIntercept='custom'
+    // requested it cross at Y=0.
     let xAxisY = xAxisPosition;
     let yAxisX = yAxisPosition;
 

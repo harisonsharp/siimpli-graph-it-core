@@ -15,7 +15,7 @@
     "author": "Siimpl",
     "license": "ISC",
     "publishConfig": {
-        "registry": "https://npm.pkg.github.com",
+        "registry": "https://<mesh-hostname>:8443/api/packages/siimpli/npm/",
         "access": "restricted"
     },
     "dependencies": {

@@ -368,26 +368,20 @@ export class ScaleFactory {
 
             // Create separate scales for primary and secondary axes
             const primaryYScale = this.createYScale('primary', data, primarySeries, height, config, hasBarSeries, xAxisInfo);
-            let secondaryYScale = this.createYScale('secondary', data, secondarySeries, height, config, false, xAxisInfo);
+            const secondaryYScale = this.createYScale('secondary', data, secondarySeries, height, config, false, xAxisInfo);
 
-            // Each axis's own linear scale maps its own [min,max] to the full
-            // [height,0] pixel range independently, so even when a custom intercept
-            // (e.g. "0,0,0") guarantees both domains include their crossing value,
-            // the two crossing points still land on different pixel rows. Re-anchor
-            // the secondary scale's pixel range around the primary's actual crossing
-            // pixel, keeping its domain endpoints pinned to the original [0,height]
-            // extremes — a 3-point piecewise-linear scale, not a uniform rescale.
-            if (config.axisIntercept === 'custom' && config.customIntercept) {
+            // axisIntercept 'custom' with both a y and y2 value (e.g. "0,0,0" — cross
+            // both axes at zero) only guarantees each intercept is individually
+            // reachable within its own domain; the two scales are otherwise built
+            // independently from their own data, so their intercepts can land at
+            // different pixel rows even though drawAxes draws one shared x-axis line
+            // at the primary's intercept. Stretch the secondary domain (never crop
+            // it) so its intercept lines up with the primary's.
+            if (config.axisIntercept === 'custom' && !config.logY && config.customIntercept) {
                 const primaryIntercept = Number.parseFloat(config.customIntercept.y);
                 const secondaryIntercept = Number.parseFloat(config.customIntercept.y2);
-                const [sMin, sMax] = secondaryYScale.domain();
-
-                if (Number.isFinite(primaryIntercept) && Number.isFinite(secondaryIntercept) &&
-                    secondaryIntercept > sMin && secondaryIntercept < sMax) {
-                    const primaryZeroPixel = primaryYScale(primaryIntercept);
-                    secondaryYScale = d3.scaleLinear()
-                        .domain([sMin, secondaryIntercept, sMax])
-                        .range([height, primaryZeroPixel, 0]);
+                if (Number.isFinite(primaryIntercept) && Number.isFinite(secondaryIntercept)) {
+                    this.alignSecondaryIntercept(primaryYScale, secondaryYScale, primaryIntercept, secondaryIntercept);
                 }
             }
 
@@ -403,6 +397,42 @@ export class ScaleFactory {
             const yScale = this.createYScale('primary', data, primarySeries, height, config, hasBarSeries, xAxisInfo);
             return { xScale, yScale };
         }
+    }
+
+    /**
+     * Stretch the secondary Y scale's domain (in place, extending only — never
+     * cropping the data it already needs to show) so its intercept value lands at
+     * the same fractional height as the primary scale's intercept. Data-driven
+     * domains rarely share the same negative:positive ratio, so without this the
+     * two axes' zero (or whatever intercept value) sit at different pixel rows.
+     * No-ops if either intercept falls outside its own scale's domain, or if the
+     * primary's intercept is at an extreme (fraction 0 or 1, division by zero).
+     * @param {d3.ScaleLinear} primaryScale
+     * @param {d3.ScaleLinear} secondaryScale
+     * @param {number} primaryIntercept
+     * @param {number} secondaryIntercept
+     */
+    static alignSecondaryIntercept(primaryScale, secondaryScale, primaryIntercept, secondaryIntercept) {
+        const [pLo, pHi] = primaryScale.domain();
+        const [sLo, sHi] = secondaryScale.domain();
+
+        if (pHi === pLo) return;
+        if (!(pLo <= primaryIntercept && primaryIntercept <= pHi)) return;
+        if (!(sLo <= secondaryIntercept && secondaryIntercept <= sHi)) return;
+
+        const targetFraction = (primaryIntercept - pLo) / (pHi - pLo);
+        if (targetFraction <= 0 || targetFraction >= 1) return;
+
+        // Try extending the low end first (keeping the existing high end fixed).
+        const loForFixedHi = (secondaryIntercept - targetFraction * sHi) / (1 - targetFraction);
+        if (loForFixedHi <= sLo) {
+            secondaryScale.domain([loForFixedHi, sHi]);
+            return;
+        }
+
+        // Otherwise extend the high end instead (keeping the existing low end fixed).
+        const hiForFixedLo = sLo + (secondaryIntercept - sLo) / targetFraction;
+        secondaryScale.domain([sLo, Math.max(hiForFixedLo, sHi)]);
     }
 
     /**
