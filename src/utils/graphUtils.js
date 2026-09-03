@@ -239,13 +239,18 @@ function drawLogoToCanvas(ctx, logoImage, width, height, margin, scale = 1) {
 
             const graphHeight = height - usedMargin.top - usedMargin.bottom;
             const gap = 30 * scale;
+            // Kept clear below the logo so it never sits flush against the canvas'
+            // bottom pixel row — logoY + logoHeight lands exactly at `height - bottomPad`
+            // in the tightest case below, not at `height` itself.
+            const bottomPad = 10 * scale;
             const aspectRatio = logoImage.naturalHeight / logoImage.naturalWidth;
 
-            // Room available below the plot, in the bottom margin, after the gap.
-            // A logo whose natural aspect ratio is taller than ~1.17:1 (relative to
-            // the default 60px target width) would push past the canvas edge and get
-            // silently clipped when rasterized — shrink it to fit instead.
-            const availableHeight = usedMargin.bottom - gap;
+            // Room available below the plot, in the bottom margin, after the gap and
+            // the bottom padding. A logo whose natural aspect ratio is taller than
+            // ~1.17:1 (relative to the default 60px target width) would push past the
+            // canvas edge and get silently clipped when rasterized — shrink it to fit
+            // instead.
+            const availableHeight = usedMargin.bottom - gap - bottomPad;
             let logoTargetWidth = 60 * scale;
             let logoHeight = logoTargetWidth * aspectRatio;
             if (availableHeight > 0 && logoHeight > availableHeight) {
@@ -258,7 +263,7 @@ function drawLogoToCanvas(ctx, logoImage, width, height, margin, scale = 1) {
 
             ctx.save();
             ctx.globalAlpha = 0.8;
-            if (logoX >= 0 && logoY >= 0 && logoY + logoHeight <= height) {
+            if (logoX >= 0 && logoY >= 0 && logoY + logoHeight + bottomPad <= height) {
                 ctx.drawImage(logoImage, logoX, logoY, logoTargetWidth, logoHeight);
             }
             ctx.restore();

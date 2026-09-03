@@ -286,7 +286,8 @@ export class LegendRenderer {
     static drawSeriesLegend(graphConfig, svg, validData, seriesInfo, colorScale, graphDimensions, margin, xOffset = 90) {
         // Legend placement. Defaults to bottom-left (below the plot); 'top-right' / 'bottom-right'
         // tuck it into a chart corner — set via graphConfig.legendPosition in the template.
-        const LEGEND_W = 150; // approx width reserved when right-aligning
+        const LEGEND_W = 150; // rough first-guess width, used only until the real content is measured below
+        const RIGHT_EDGE_PAD = 15; // breathing room kept between the legend text and the canvas edge
         const legendPosition = graphConfig?.legendPosition || 'bottom-left';
         let legendTransform;
         if (legendPosition === 'top-right') {
@@ -447,6 +448,27 @@ export class LegendRenderer {
             // Add extra spacing between series groups
 
         });
+
+        // The transform set above is only a rough first guess (LEGEND_W): real labels
+        // vary a lot in length (a two-word series name vs. "Cumulative Undiscounted Net
+        // Cashflow" on a financial chart), so a fixed 150px either strands short labels
+        // with dead space to their right or runs long ones straight off the canvas edge.
+        // Now that every item is actually in the DOM, measure the group's real width and
+        // right-align it against the true canvas edge (margin.left + width + margin.right)
+        // instead — this is what "more to the right, without being cut off" means in
+        // practice: as far right as the real content allows.
+        if (legendPosition === 'top-right' || legendPosition === 'bottom-right') {
+            try {
+                const legendWidth = legend.node().getBBox().width;
+                const rightEdgeX = margin.left + graphDimensions.width + margin.right - RIGHT_EDGE_PAD;
+                const currentTransform = legend.attr('transform') || '';
+                const match = currentTransform.match(/translate\(\s*([-\d.]+)[,\s]+([-\d.]+)\s*\)/);
+                const y = match ? match[2] : (margin.top + 10);
+                legend.attr('transform', `translate(${rightEdgeX - legendWidth}, ${y})`);
+            } catch {
+                // getBBox unavailable (e.g. headless/jsdom rendering) — keep the LEGEND_W estimate.
+            }
+        }
     }
 }
 
