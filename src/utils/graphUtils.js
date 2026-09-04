@@ -224,47 +224,76 @@ function exportWithOptimizedCanvas(svgBlob, canvasRef, width, height, WATERMARK_
 }
 
 /**
+ * Pure placement math for the logo watermark, shared by the main-thread canvas
+ * path (drawLogoToCanvas, below) and the off-main-thread rasterizer worker
+ * (rasterizeGraphWorker.js), which has no HTMLImageElement to introspect and
+ * so needs this computed ahead of time on the main thread.
+ *
+ * @param {number} naturalWidth - Logo's natural/intrinsic width
+ * @param {number} naturalHeight - Logo's natural/intrinsic height
+ * @param {number} width - Target canvas width
+ * @param {number} height - Target canvas height
+ * @param {Object} margin - {top, right, bottom, left}
+ * @param {number} scale
+ * @returns {{shouldDraw: boolean, x: number, y: number, targetWidth: number, targetHeight: number, alpha: number}}
+ */
+export function computeLogoPlacement(naturalWidth, naturalHeight, width, height, margin, scale = 1) {
+    const baseMargin = margin || { top: 80, right: 320, bottom: 100, left: 100 };
+    const usedMargin = {
+        top: baseMargin.top * scale,
+        right: baseMargin.right * scale,
+        bottom: baseMargin.bottom * scale,
+        left: baseMargin.left * scale
+    };
+
+    const graphHeight = height - usedMargin.top - usedMargin.bottom;
+    const gap = 30 * scale;
+    // Kept clear below the logo so it never sits flush against the canvas'
+    // bottom pixel row — logoY + logoHeight lands exactly at `height - bottomPad`
+    // in the tightest case below, not at `height` itself.
+    const bottomPad = 10 * scale;
+    const aspectRatio = naturalHeight / naturalWidth;
+
+    // Room available below the plot, in the bottom margin, after the gap and
+    // the bottom padding. A logo whose natural aspect ratio is taller than
+    // ~1.17:1 (relative to the default 60px target width) would push past the
+    // canvas edge and get silently clipped when rasterized — shrink it to fit
+    // instead.
+    const availableHeight = usedMargin.bottom - gap - bottomPad;
+    let logoTargetWidth = 60 * scale;
+    let logoHeight = logoTargetWidth * aspectRatio;
+    if (availableHeight > 0 && logoHeight > availableHeight) {
+        logoHeight = availableHeight;
+        logoTargetWidth = logoHeight / aspectRatio;
+    }
+
+    const logoX = usedMargin.left - logoTargetWidth - 20;
+    const logoY = usedMargin.top + graphHeight + gap;
+
+    return {
+        shouldDraw: logoX >= 0 && logoY >= 0 && logoY + logoHeight + bottomPad <= height,
+        x: logoX,
+        y: logoY,
+        targetWidth: logoTargetWidth,
+        targetHeight: logoHeight,
+        alpha: 0.8
+    };
+}
+
+/**
  * Helper: Draw logo onto canvas context
  */
 function drawLogoToCanvas(ctx, logoImage, width, height, margin, scale = 1) {
     if (logoImage && logoImage.complete && logoImage.naturalWidth > 0) {
         if (logoImage.src && !logoImage.src.includes('data:') && logoImage.naturalWidth > 1 && logoImage.naturalHeight > 1) {
-            const baseMargin = margin || { top: 80, right: 320, bottom: 100, left: 100 };
-            const usedMargin = {
-                top: baseMargin.top * scale,
-                right: baseMargin.right * scale,
-                bottom: baseMargin.bottom * scale,
-                left: baseMargin.left * scale
-            };
-
-            const graphHeight = height - usedMargin.top - usedMargin.bottom;
-            const gap = 30 * scale;
-            // Kept clear below the logo so it never sits flush against the canvas'
-            // bottom pixel row — logoY + logoHeight lands exactly at `height - bottomPad`
-            // in the tightest case below, not at `height` itself.
-            const bottomPad = 10 * scale;
-            const aspectRatio = logoImage.naturalHeight / logoImage.naturalWidth;
-
-            // Room available below the plot, in the bottom margin, after the gap and
-            // the bottom padding. A logo whose natural aspect ratio is taller than
-            // ~1.17:1 (relative to the default 60px target width) would push past the
-            // canvas edge and get silently clipped when rasterized — shrink it to fit
-            // instead.
-            const availableHeight = usedMargin.bottom - gap - bottomPad;
-            let logoTargetWidth = 60 * scale;
-            let logoHeight = logoTargetWidth * aspectRatio;
-            if (availableHeight > 0 && logoHeight > availableHeight) {
-                logoHeight = availableHeight;
-                logoTargetWidth = logoHeight / aspectRatio;
-            }
-
-            const logoX = usedMargin.left - logoTargetWidth - 20;
-            const logoY = usedMargin.top + graphHeight + gap;
+            const placement = computeLogoPlacement(
+                logoImage.naturalWidth, logoImage.naturalHeight, width, height, margin, scale
+            );
 
             ctx.save();
-            ctx.globalAlpha = 0.8;
-            if (logoX >= 0 && logoY >= 0 && logoY + logoHeight + bottomPad <= height) {
-                ctx.drawImage(logoImage, logoX, logoY, logoTargetWidth, logoHeight);
+            ctx.globalAlpha = placement.alpha;
+            if (placement.shouldDraw) {
+                ctx.drawImage(logoImage, placement.x, placement.y, placement.targetWidth, placement.targetHeight);
             }
             ctx.restore();
         }

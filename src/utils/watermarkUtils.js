@@ -21,7 +21,7 @@
  * @relatedFiles useGraphGeneration.js, constants.js
  */
 
-export const generateWatermarkTile = (config) => {
+export const generateWatermarkTile = (config, createCanvas = () => document.createElement('canvas')) => {
     const normalizedConfig = {
         seed: 'siimpli-graph-it',
         tilePxSize: 64,
@@ -35,7 +35,10 @@ export const generateWatermarkTile = (config) => {
         ...(config?.baseColor || {})
     };
     const { seed, tilePxSize, shadeDifference, baseColor } = normalizedConfig;
-    const tileCanvas = document.createElement('canvas');
+    // createCanvas defaults to a DOM <canvas>; the off-main-thread rasterizer
+    // worker (rasterizeGraphWorker.js) passes () => new OffscreenCanvas(...)
+    // instead, since Workers have no `document`.
+    const tileCanvas = createCanvas();
     tileCanvas.width = tilePxSize;
     tileCanvas.height = tilePxSize;
     const ctx = tileCanvas.getContext('2d');
