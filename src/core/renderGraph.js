@@ -84,11 +84,7 @@ function calculateDimensions(settings, columnInfo, graphConfig) {
 
     rightMargin = Math.max(120, Math.min(450, rightMargin));
 
-    const hasProjectName = Boolean(graphConfig.projectName && String(graphConfig.projectName).trim());
-    const hasSubtitle = Boolean(graphConfig.subtitle && String(graphConfig.subtitle).trim());
-    const topMargin = hasProjectName && hasSubtitle ? 130 : (hasProjectName || hasSubtitle ? 110 : 80);
-
-    const margin = { top: topMargin, right: rightMargin, bottom: 100, left: 100 };
+    const margin = { top: headerTopMargin(graphConfig), right: rightMargin, bottom: 100, left: 100 };
 
     const widthMultiplier = graphConfig.widthMultiplier || 1.0;
     const heightMultiplier = graphConfig.heightMultiplier || 1.0;
@@ -183,51 +179,95 @@ function keepInsideLeftEdge(textEl, pad = 10) {
     textEl.attr('x', x + (pad - box.x));
 }
 
+// Header stack geometry. Every optional row shifts the rows below it, so the
+// y-positions and the top margin are derived from one list rather than two
+// hand-tuned expressions that have to be kept in agreement. The gap and margin
+// tables are indexed by row position and reproduce the previous hard-coded
+// values exactly for every combination that existed before provenanceNote.
+const HEADER_FIRST_ROW_Y = 30;
+const HEADER_ROW_GAPS = [25, 23, 23];      // space below the row at each index
+const HEADER_BASE_MARGIN = 80;             // top margin with no optional rows
+const HEADER_MARGIN_STEPS = [30, 20, 20];  // added per optional row present
+const HEADER_OPTIONAL_KEYS = ['projectName', 'subtitle', 'provenanceNote'];
+
+/**
+ * Top margin needed to clear the header stack. Shares HEADER_OPTIONAL_KEYS with
+ * buildHeaderRows so a new row can never be rendered into space that was not
+ * reserved for it.
+ */
+function headerTopMargin(config) {
+    const present = HEADER_OPTIONAL_KEYS
+        .filter(key => config?.[key] && String(config[key]).trim()).length;
+
+    let margin = HEADER_BASE_MARGIN;
+    for (let i = 0; i < present; i += 1) {
+        margin += HEADER_MARGIN_STEPS[Math.min(i, HEADER_MARGIN_STEPS.length - 1)];
+    }
+    return margin;
+}
+
+/**
+ * Build the header rows, top to bottom, each with its resolved y position.
+ * Blank optional rows are dropped before layout so they take up no space.
+ */
+function buildHeaderRows(config, title) {
+    const rows = [
+        {
+            text: (config.projectName || '').trim(),
+            className: 'project-name',
+            fontSize: '28px', fontWeight: 'bold', fill: '#333',
+        },
+        {
+            text: (config.subtitle || '').trim(),
+            className: 'graph-subtitle',
+            fontSize: '16px', fontWeight: 'normal', fill: '#555',
+        },
+        {
+            // Sits directly above the title: it qualifies the data the chart is
+            // drawn from, so it reads as a lead-in to the title rather than as a
+            // heading in its own right. Deliberately the quietest row here.
+            text: (config.provenanceNote || '').trim(),
+            className: 'graph-provenance',
+            fontSize: '13px', fontWeight: 'normal', fill: '#777',
+        },
+    ].filter(row => row.text.length > 0);
+
+    // Only a real heading softens the title. A provenance note is metadata, so
+    // a chart carrying one and nothing else keeps its bold standalone title.
+    const hasHeading = rows.some(row => row.className !== 'graph-provenance');
+
+    rows.push({
+        text: title,
+        className: 'graph-title',
+        fontSize: '20px',
+        fontWeight: hasHeading ? 'normal' : 'bold',
+        fill: hasHeading ? '#444' : '#333',
+    });
+
+    let y = HEADER_FIRST_ROW_Y;
+    rows.forEach((row, i) => {
+        row.y = y;
+        y += HEADER_ROW_GAPS[Math.min(i, HEADER_ROW_GAPS.length - 1)];
+    });
+
+    return rows;
+}
+
 function renderProjectName(svg, config, dimensions, title) {
     const centerX = dimensions.margin.left + dimensions.width / 2;
-    const projectName = (config.projectName || '').trim();
-    const subtitle = (config.subtitle || '').trim();
-    const hasProjectName = projectName.length > 0;
-    const hasSubtitle = subtitle.length > 0;
 
-    if (hasProjectName) {
+    buildHeaderRows(config, title).forEach((row) => {
         keepInsideLeftEdge(svg.append('text')
             .attr('x', centerX)
-            .attr('y', 30)
+            .attr('y', row.y)
             .attr('text-anchor', 'middle')
-            .attr('class', 'project-name')
+            .attr('class', row.className)
             .style('font-family', 'sans-serif')
-            .style('font-size', '28px')
-            .style('font-weight', 'bold')
-            .style('fill', '#333')
-            .text(projectName));
-    }
-
-    if (hasSubtitle) {
-        keepInsideLeftEdge(svg.append('text')
-            .attr('x', centerX)
-            .attr('y', hasProjectName ? 55 : 30)
-            .attr('text-anchor', 'middle')
-            .attr('class', 'graph-subtitle')
-            .style('font-family', 'sans-serif')
-            .style('font-size', '16px')
-            .style('font-weight', 'normal')
-            .style('fill', '#555')
-            .text(subtitle));
-    }
-
-    const titleY = hasProjectName ? (hasSubtitle ? 78 : 55) : (hasSubtitle ? 55 : 30);
-
-    keepInsideLeftEdge(svg.append('text')
-        .attr('x', centerX)
-        .attr('y', titleY)
-        .attr('text-anchor', 'middle')
-        .attr('class', 'graph-title')
-        .style('font-family', 'sans-serif')
-        .style('font-size', '20px')
-        .style('font-weight', hasProjectName || hasSubtitle ? 'normal' : 'bold')
-        .style('fill', hasProjectName || hasSubtitle ? '#444' : '#333')
-        .text(title));
+            .style('font-size', row.fontSize)
+            .style('font-weight', row.fontWeight)
+            .style('fill', row.fill)
+            .text(row.text));
+    });
 }
 
 /**

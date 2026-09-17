@@ -1,13 +1,18 @@
 import { describe, it, expect, beforeEach, beforeAll, vi } from 'vitest';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import * as d3 from 'd3';
 import { renderGraph } from './renderGraph.js';
 
 describe('renderGraph integration tests', () => {
     let svg;
     let csvData;
-    const dataPath = path.resolve(process.cwd(), '../siimpli-graph-it-copy/data/concentrates/copper.csv');
+    // Fixture lives in the sibling siimpli-graph-it checkout, under data/spring-2026/
+    // since that repo's data folders were grouped by season. Resolved from this file
+    // rather than process.cwd() so the suite works whatever directory vitest runs in.
+    const here = path.dirname(fileURLToPath(import.meta.url));
+    const dataPath = path.resolve(here, '../../../siimpli-graph-it/data/spring-2026/concentrates/copper.csv');
     
     beforeAll(() => {
         const fileContent = fs.readFileSync(dataPath, 'utf8');
@@ -401,5 +406,127 @@ describe('renderGraph NO DATA placeholder', () => {
             svg, csvData: [], graphConfig: { series: [{ yAxis: 'v' }] }, globalSettings: settings, colorSchemes: {}
         });
         expect(result.success).toBe(false);
+    });
+});
+
+// Self-contained (no external CSV fixture) so it runs even where the
+// integration suite's data file is absent.
+//
+// The header y positions and the plot's top margin are derived from one list in
+// renderGraph.js. They used to be two independently hard-coded expressions, and
+// the whole point of these assertions is that they can never drift apart again:
+// if the margin stops covering the stack, the title renders over the plot area.
+describe('renderGraph header layout', () => {
+    let svg;
+
+    beforeEach(() => {
+        document.body.innerHTML = '';
+        svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+        document.body.appendChild(svg);
+    });
+
+    const settings = {
+        graphDimensions: { width: 1200, height: 800 },
+        colorScheme: 'default'
+    };
+
+    const csvData = [
+        { year: 2020, cu_grade_pct: 24.1 },
+        { year: 2021, cu_grade_pct: 25.4 },
+        { year: 2022, cu_grade_pct: 23.8 }
+    ];
+
+    /** Render with the given header fields, then read the stack back off the SVG. */
+    const renderHeader = (headerFields) => {
+        const result = renderGraph({
+            svg,
+            csvData,
+            graphConfig: {
+                graphType: 'scatter',
+                xAxis: 'year',
+                title: 'Copper Grade',
+                series: [{ yAxis: 'cu_grade_pct', type: 'scatter' }],
+                ...headerFields
+            },
+            globalSettings: settings,
+            colorSchemes: { default: ['#1f77b4'] }
+        });
+        expect(result.success).toBe(true);
+
+        const yOf = (className) => {
+            const el = svg.querySelector(`text.${className}`);
+            return el ? Number(el.getAttribute('y')) : null;
+        };
+
+        // The plot group is the first <g> in document order; its translate
+        // carries the top margin actually reserved for the header.
+        const transform = svg.querySelector('g[transform]').getAttribute('transform');
+        const topMargin = Number(/translate\([^,]+,\s*([\d.]+)\)/.exec(transform)[1]);
+
+        return {
+            projectName: yOf('project-name'),
+            subtitle: yOf('graph-subtitle'),
+            provenance: yOf('graph-provenance'),
+            title: yOf('graph-title'),
+            topMargin
+        };
+    };
+
+    it('leaves the pre-provenance stack byte-for-byte unchanged', () => {
+        expect(renderHeader({})).toEqual({
+            projectName: null, subtitle: null, provenance: null, title: 30, topMargin: 80
+        });
+        expect(renderHeader({ projectName: 'Kutcho' })).toEqual({
+            projectName: 30, subtitle: null, provenance: null, title: 55, topMargin: 110
+        });
+        expect(renderHeader({ subtitle: 'Feasibility Study' })).toEqual({
+            projectName: null, subtitle: 30, provenance: null, title: 55, topMargin: 110
+        });
+        expect(renderHeader({ projectName: 'Kutcho', subtitle: 'Feasibility Study' })).toEqual({
+            projectName: 30, subtitle: 55, provenance: null, title: 78, topMargin: 130
+        });
+    });
+
+    it('places the provenance note directly above the title', () => {
+        expect(renderHeader({ provenanceNote: 'Most recently extracted: 2026-06-21' })).toEqual({
+            projectName: null, subtitle: null, provenance: 30, title: 55, topMargin: 110
+        });
+        expect(renderHeader({
+            projectName: 'Kutcho',
+            subtitle: 'Feasibility Study',
+            provenanceNote: 'Most recently extracted: 2026-06-21'
+        })).toEqual({
+            projectName: 30, subtitle: 55, provenance: 78, title: 101, topMargin: 150
+        });
+    });
+
+    it('reserves enough top margin to clear every header row it renders', () => {
+        [
+            {},
+            { projectName: 'Kutcho' },
+            { subtitle: 'Feasibility Study' },
+            { provenanceNote: 'Most recently extracted: 2026-06-21' },
+            { projectName: 'Kutcho', subtitle: 'Feasibility Study' },
+            { projectName: 'Kutcho', subtitle: 'Feasibility Study', provenanceNote: 'x' }
+        ].forEach((fields) => {
+            const stack = renderHeader(fields);
+            expect(stack.title).toBeLessThan(stack.topMargin);
+        });
+    });
+
+    it('does not let a provenance note demote the title', () => {
+        // A provenance note is metadata, not a heading, so a chart carrying one
+        // and nothing else keeps the bold standalone title. A subtitle does soften it.
+        renderHeader({ provenanceNote: 'Most recently extracted: 2026-06-21' });
+        expect(svg.querySelector('text.graph-title').style.fontWeight).toBe('bold');
+
+        renderHeader({ subtitle: 'Feasibility Study' });
+        expect(svg.querySelector('text.graph-title').style.fontWeight).toBe('normal');
+    });
+
+    it('drops blank header rows instead of reserving space for them', () => {
+        expect(renderHeader({ projectName: '', subtitle: '   ', provenanceNote: '' })).toEqual({
+            projectName: null, subtitle: null, provenance: null, title: 30, topMargin: 80
+        });
     });
 });

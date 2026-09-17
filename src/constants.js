@@ -79,6 +79,10 @@ export const DEFAULT_GRAPH_CONFIG = {
     barMode: 'group', // 'group' or 'stack'
     title: '',
     subtitle: '',
+    // Data-provenance line rendered directly above the title, e.g.
+    // "Most recently extracted: 2026-06-21". Metadata about the data behind
+    // the chart, not an editorial heading — see renderProjectName.
+    provenanceNote: '',
     dualUnits: false,
     scaleFactor: 1,
     fromUnits: '',
