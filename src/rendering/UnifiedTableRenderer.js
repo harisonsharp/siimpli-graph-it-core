@@ -476,10 +476,14 @@ export class UnifiedTableRenderer {
                         scanIdx--;
                     }
 
-                    // Walk backwards to find the most-recent non-null Y value.
+                    // Walk backwards to find the most-recent non-null Y value. parseCSV
+                    // leaves an empty cell as '', and +'' is 0, so it has to be ruled out
+                    // by name: otherwise a dataset that UNIONs several row kinds (market
+                    // months beside report dates) stops on the latest row of the OTHER
+                    // kind and shows a blank for every series that row doesn't carry.
                     for (let k = scanIdx; k >= 0; k--) {
                         const d = sortedData[k];
-                        if (d[yCol] !== undefined && d[yCol] !== null && !isNaN(+d[yCol])) {
+                        if (d[yCol] !== undefined && d[yCol] !== null && d[yCol] !== '' && !isNaN(+d[yCol])) {
                             foundVal = d[yCol];
                             break;
                         }
@@ -524,6 +528,19 @@ export class UnifiedTableRenderer {
         });
 
         return rows;
+    }
+
+    /**
+     * A value-column number: two decimals, except below 0.1 where two decimals would erase it.
+     * Iron ore in US$/lb (0.0461) would print as 0.05, and the cheaper categories as 0.04 or
+     * 0.00; three significant figures keep them apart. Zero stays "0.00".
+     *
+     * @param {number} value
+     * @returns {string}
+     */
+    static _formatPrimaryValue(value) {
+        if (!Number.isFinite(value)) return String(value);
+        return value !== 0 && Math.abs(value) < 0.1 ? value.toPrecision(3) : value.toFixed(2);
     }
 
     /**
@@ -784,9 +801,10 @@ export class UnifiedTableRenderer {
 
         const legendX = dimensions.margin.left + 20;
 
-        // Place the table below the chart area with a 40 px clearance gap.
+        // Place the table below the chart area with a 40 px clearance gap, and below
+        // a footnote when one reaches further down (minFooterTop, set by renderGraph).
         const legendHeight = dimensions.margin.top + dimensions.height;
-        const tableY = dimensions.margin.top + legendHeight + 40;
+        const tableY = Math.max(dimensions.margin.top + legendHeight + 40, dimensions.minFooterTop || 0);
 
         return { x: legendX, y: tableY };
     }
@@ -837,7 +855,8 @@ export class UnifiedTableRenderer {
      *   (roughly an 8×8 px bounding box).
      *
      * **Value formatting:**
-     * - Numeric primary values: `toFixed(2)`.
+     * - Numeric primary values: `toFixed(2)`, or three significant figures below 0.1 (see
+     *   `_formatPrimaryValue`).
      * - Numeric converted values: `toPrecision(4)` — appropriate because the converted magnitude
      *   may differ significantly from the primary, making a fixed decimal count misleading.
      * - Date X-values in the header row: formatted as `M/D/YYYY`.
@@ -1221,7 +1240,7 @@ export class UnifiedTableRenderer {
             if(showValues){
                 const valueFormatted = row.value === 'N/A'
                     ? 'N/A'
-                    : (typeof row.value === 'number' ? (row.value).toFixed(2) : row.value);
+                    : (typeof row.value === 'number' ? this._formatPrimaryValue(row.value) : row.value);
 
                 group.append('text')
                     .attr('x', colX('value'))

@@ -110,7 +110,7 @@ export class BiasTableRenderer {
         const tableX = legendX + unifiedTableWidth + gap + 30;
 
         const legendHeight = dimensions.margin.top + dimensions.height;
-        const tableY = dimensions.margin.top + legendHeight + 40;
+        const tableY = Math.max(dimensions.margin.top + legendHeight + 40, dimensions.minFooterTop || 0);
 
         return { x: tableX, y: tableY };
     }

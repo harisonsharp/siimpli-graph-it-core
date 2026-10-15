@@ -85,6 +85,9 @@ export const DEFAULT_GRAPH_CONFIG = {
     // "Most recently extracted: 2026-06-21". Metadata about the data behind
     // the chart, not an editorial heading — see renderProjectName.
     provenanceNote: '',
+    // Method or data note set in small grey text under the plot, e.g. how a value
+    // was converted. "\n" breaks a line; {column} tokens are filled from the data.
+    footnote: '',
     dualUnits: false,
     scaleFactor: 1,
     fromUnits: '',

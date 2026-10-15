@@ -21,6 +21,7 @@ export * from './utils/statisticsUtils.js';
 export * from './utils/watermarkUtils.js';
 export * from './utils/batchConfigAdapter.js';
 export * from './utils/categoryFit.js';
+export * from './utils/dataTokens.js';
 export * from './utils/SymbolFactory.js';
 export * from './utils/MathUtils.js';
 export * from './utils/mathUtilsHelpers.js';
