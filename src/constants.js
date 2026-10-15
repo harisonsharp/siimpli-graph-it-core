@@ -60,6 +60,8 @@ export const DEFAULT_SERIES_CONFIG = {
         mode: 'continuous',       // 'continuous' | 'distinct'
         column: '',               // column id string, e.g. "colName::fileName"
         scheme: 'warm-cool',      // for continuous: scheme name from ScaleFactory.COLOR_SCHEMES
+        scale: 'linear',          // for continuous: 'linear' | 'quantile' | 'log' | 'pretty' | 'stddev'
+        classes: 5,               // for continuous quantile / pretty: number of classes (2-10)
         categoryColors: {}        // for distinct: { [categoryValue]: hexColor }
     }
 };

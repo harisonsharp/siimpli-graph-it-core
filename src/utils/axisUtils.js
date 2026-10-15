@@ -404,7 +404,7 @@ const drawSecondaryYAxis = (g, secondaryYScale, width, secondaryColor, config = 
     return secondaryYAxis;
 };
 
-const drawLabels = (g, height, width, margin, primaryLabel, secondaryLabel, xAxisLabel, xAxisY, xAxisLabelOffset, primaryColor, secondaryColor) => {
+const drawLabels = (g, height, width, margin, primaryLabel, secondaryLabel, xAxisLabel, xLabelBaseline, xAxisLabelOffset, primaryColor, secondaryColor) => {
     // Primary Y axis label
     g.append('text')
         .attr('class', 'y-axis-label y-axis-label-primary')
@@ -438,7 +438,7 @@ const drawLabels = (g, height, width, margin, primaryLabel, secondaryLabel, xAxi
     // X axis label
     g.append('text')
         .attr('class', 'x-axis-label')
-        .attr('y', xAxisY + xAxisLabelOffset + 10) // Add a bit more padding for rotated labels
+        .attr('y', xLabelBaseline + xAxisLabelOffset + 10) // Add a bit more padding for rotated labels
         .attr('x', width / 2)
         .style('text-anchor', 'middle')
         .style('font-family', 'sans-serif')
@@ -567,14 +567,18 @@ export const drawAxes = (
         drawSecondaryYAxis(g, secondaryYScale, width, secondaryColor, config);
     }
 
-    drawLabels(g, height, width, margin, finalYLabelWithLog, secondaryLabel, finalXLabel, xAxisY, 50, primaryColor, secondaryColor);
+    // Axis titles stay on the plot edge: only the axis line and its tick labels move
+    // to the intercept, otherwise a mid-plot crossing drops the title onto the data.
+    drawLabels(g, height, width, margin, finalYLabelWithLog, secondaryLabel, finalXLabel, height, 50, primaryColor, secondaryColor);
 
     // Draw guide lines if enabled
     if (globalSettings.showGuideLines) {
         drawGuideLines(g, xScale, primaryYScale, width, height, config);
     }
 
-    return { xAxisY, xAxisLabelOffset: 50 };
+    // xAxisY is the baseline the x-axis title (and anything laid out beneath it) hangs
+    // from — the bottom edge of the plot. xAxisLineY is where the axis line was drawn.
+    return { xAxisY: height, xAxisLineY: xAxisY, xAxisLabelOffset: 50 };
 };
 
 /**
@@ -619,8 +623,12 @@ export const drawGuideLines = (g, xScale, yScale, width, height, config = {}) =>
         .attr('class', 'guide-lines')
         .style('opacity', 0.15);
 
-    // Horizontal guide lines (based on Y-axis ticks)
-    const yTicks = yScale.ticks ? yScale.ticks() : yScale.domain();
+    // Horizontal guide lines (based on Y-axis ticks). A static scale sets the labelled
+    // ticks explicitly, so the grid follows those rather than d3's automatic ones.
+    const staticYScale = getStaticScale(config, 'y');
+    const yTicks = staticYScale
+        ? buildTickValues(staticYScale.min, staticYScale.max, staticYScale.step)
+        : yScale.ticks ? yScale.ticks() : yScale.domain();
     yTicks.forEach(tick => {
         guideGroup.append('line')
             .attr('x1', 0)
@@ -636,9 +644,13 @@ export const drawGuideLines = (g, xScale, yScale, width, height, config = {}) =>
     // Handle both linear and band scales
     if (xScale.ticks) {
         // Linear scale — for logX match the labelled decade/mantissa ticks
+        const staticXScale = getStaticScale(config, 'x');
+        const xIsTimeScale = xScale.domain()[0] instanceof Date;
         const xTicks = config?.logX
             ? logTickValues(...xScale.domain())
-            : xScale.ticks();
+            : staticXScale && !xIsTimeScale
+                ? buildTickValues(staticXScale.min, staticXScale.max, staticXScale.step)
+                : xScale.ticks();
         xTicks.forEach(tick => {
             guideGroup.append('line')
                 .attr('x1', xScale(tick))

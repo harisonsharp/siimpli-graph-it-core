@@ -117,6 +117,10 @@ export class LegendRenderer {
         const panelWidth = 160;
         let panelY = margin.top;
 
+        const fmt = v => (Math.abs(v) >= 1000 || (v !== 0 && Math.abs(v) < 0.01))
+            ? v.toExponential(2)
+            : v.toPrecision(4).replace(/\.?0+$/, '');
+
         seriesInfo.forEach((series, i) => {
             const grading = seriesColorScales[i];
             if (!grading) return;
@@ -174,14 +178,80 @@ export class LegendRenderer {
                 });
 
                 panelY += panelH + 8;
+            } else if (colorScale.gradingClasses?.length) {
+                // --- Classed panel (quantile / pretty breaks / standard deviations) ---
+                const classes = colorScale.gradingClasses;
+                const rowH = 18;
+                const headerH = 28;
+                const panelH = headerH + classes.length * rowH + 10;
+
+                const panel = svg.append('g').attr('class', 'color-grading-legend');
+                panel.append('rect')
+                    .attr('x', panelX).attr('y', panelY)
+                    .attr('width', panelWidth).attr('height', panelH)
+                    .attr('rx', 6).attr('ry', 6)
+                    .attr('fill', '#fff').attr('fill-opacity', 0.95)
+                    .attr('stroke', '#d1d5db').attr('stroke-width', 1);
+
+                panel.append('text')
+                    .attr('x', panelX + 8).attr('y', panelY + 11)
+                    .attr('font-size', 10).attr('font-weight', 600)
+                    .attr('font-family', 'Inter, sans-serif').attr('fill', '#1e293b')
+                    .text(seriesLabel);
+
+                panel.append('text')
+                    .attr('x', panelX + 8).attr('y', panelY + 22)
+                    .attr('font-size', 9).attr('font-family', 'Inter, sans-serif')
+                    .attr('fill', '#64748b')
+                    .text(colLabel);
+
+                // null min/max = open-ended outer class
+                const rangeLabel = c => (c.min === null
+                    ? `< ${fmt(c.max)}`
+                    : c.max === null
+                        ? `> ${fmt(c.min)}`
+                        : `${fmt(c.min)} – ${fmt(c.max)}`);
+
+                classes.forEach((c, j) => {
+                    const rowY = panelY + headerH + j * rowH;
+                    panel.append('rect')
+                        .attr('x', panelX + 8).attr('y', rowY)
+                        .attr('width', 12).attr('height', 12)
+                        .attr('rx', 2).attr('ry', 2)
+                        .attr('fill', c.color);
+                    // Standard deviations: σ band on the left, its actual values on the right.
+                    panel.append('text')
+                        .attr('x', panelX + 24).attr('y', rowY + 10)
+                        .attr('font-size', 9).attr('font-family', 'Inter, sans-serif')
+                        .attr('fill', '#334155')
+                        .text(c.sigmaLabel || rangeLabel(c));
+                    if (c.sigmaLabel) {
+                        panel.append('text')
+                            .attr('x', panelX + panelWidth - 8).attr('y', rowY + 10)
+                            .attr('text-anchor', 'end')
+                            .attr('font-size', 9).attr('font-family', 'Inter, sans-serif')
+                            .attr('fill', '#64748b')
+                            .text(rangeLabel(c));
+                    }
+                });
+
+                panelY += panelH + 8;
             } else {
                 // --- Continuous gradient panel ---
+                const isLog = colorScale.gradingType === 'log';
                 const colorValues = validData
                     .map(d => d[colorInfo.columnName])
                     .filter(v => v !== undefined && v !== null && v !== '' && typeof v === 'number');
                 if (colorValues.length === 0) return;
 
-                const extent = [Math.min(...colorValues), Math.max(...colorValues)];
+                // Log: the bar spans the positive domain the scale was built on, sampled
+                // evenly in log space so it matches the point colours.
+                const extent = isLog
+                    ? colorScale.gradingDomain
+                    : [Math.min(...colorValues), Math.max(...colorValues)];
+                const valueAt = t => (isLog
+                    ? extent[0] * Math.pow(extent[1] / extent[0], t)
+                    : extent[0] + t * (extent[1] - extent[0]));
                 const gradientId = `cg-gradient-${i}-${Date.now()}`;
                 const barW = panelWidth - 16;
                 const panelH = 62;
@@ -193,7 +263,7 @@ export class LegendRenderer {
 
                 for (let s = 0; s <= 20; s++) {
                     const t = s / 20;
-                    const val = extent[0] + t * (extent[1] - extent[0]);
+                    const val = valueAt(t);
                     gradient.append('stop')
                         .attr('offset', `${t * 100}%`)
                         .attr('stop-color', colorScale(val));
@@ -225,10 +295,6 @@ export class LegendRenderer {
                     .attr('rx', 3)
                     .attr('fill', `url(#${gradientId})`);
 
-                const fmt = v => (Math.abs(v) >= 1000 || (v !== 0 && Math.abs(v) < 0.01))
-                    ? v.toExponential(2)
-                    : v.toPrecision(4).replace(/\.?0+$/, '');
-
                 panel.append('text')
                     .attr('x', panelX + 8).attr('y', panelY + 56)
                     .attr('font-size', 9).attr('font-family', 'Inter, sans-serif')
@@ -239,6 +305,16 @@ export class LegendRenderer {
                     .attr('text-anchor', 'end')
                     .attr('font-size', 9).attr('font-family', 'Inter, sans-serif')
                     .attr('fill', '#475569').text(fmt(extent[1]));
+
+                if (isLog) {
+                    // Midpoint of a log bar is the geometric mean — label it so the
+                    // non-linear spacing is readable.
+                    panel.append('text')
+                        .attr('x', panelX + panelWidth / 2).attr('y', panelY + 56)
+                        .attr('text-anchor', 'middle')
+                        .attr('font-size', 9).attr('font-family', 'Inter, sans-serif')
+                        .attr('fill', '#475569').text(fmt(valueAt(0.5)));
+                }
 
                 panelY += panelH + 8;
             }

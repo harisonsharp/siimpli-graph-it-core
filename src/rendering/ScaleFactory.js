@@ -24,6 +24,7 @@ import { DataValidator } from '../core/validation/DataValidator.js';
 import { generateCustomBins, generateStackedBins } from '../utils/histogram.js';
 import { debugLog, debugWarn } from '../utils/debug.js';
 import { parseColumnId } from '../utils/columnUtils.js';
+import { SymbolFactory } from '../utils/SymbolFactory.js';
 export class ScaleFactory {
     /**
      * Color scheme interpolators
@@ -35,6 +36,20 @@ export class ScaleFactory {
     };
 
     static COLOR_SCHEME_NAMES = ['warm-cool', 'rainbow', 'green-red'];
+
+    /**
+     * How a continuous grading column is mapped onto the colour scheme.
+     *  - linear:   smooth, min → max
+     *  - quantile: classed, equal number of points per class
+     *  - log:      smooth, log10-spaced (positive values only)
+     *  - pretty:   classed, round-number breaks (0-5, 5-10, 10-15)
+     *  - stddev:   classed, 1σ-wide bands either side of the mean, open-ended beyond ±3σ
+     */
+    static COLOR_GRADING_SCALES = ['linear', 'quantile', 'log', 'pretty', 'stddev'];
+
+    static DEFAULT_GRADING_CLASSES = 5;
+    static MIN_GRADING_CLASSES = 2;
+    static MAX_GRADING_CLASSES = 10;
 
     /**
      * Create linear scale for continuous numeric data
@@ -113,9 +128,11 @@ export class ScaleFactory {
      * @param {Object} colorInfo - {columnName, fileName} color column info
      * @param {string} colorScheme - Color scheme name (for continuous)
      * @param {Object} categoryColors - Optional overrides for distinct mode: { [categoryValue]: hexColor }
+     * @param {Object} scaleOptions - Optional, numeric columns only: { scale, classes } — see
+     *   {@link ScaleFactory.COLOR_GRADING_SCALES}. Omitted / 'linear' keeps the min → max stretch.
      * @returns {d3.Scale|null} Color scale or null if no color grading
      */
-    static createColorScale(data, colorInfo, colorScheme = 'warm-cool', categoryColors = {}) {
+    static createColorScale(data, colorInfo, colorScheme = 'warm-cool', categoryColors = {}, scaleOptions = {}) {
         if (!colorInfo || !colorInfo.columnName) {
             return null;
         }
@@ -143,8 +160,110 @@ export class ScaleFactory {
         const extent = d3.extent(colorValues);
         const interpolator = this.COLOR_SCHEMES[colorScheme] || this.COLOR_SCHEMES['warm-cool'];
 
+        const scaleType = scaleOptions?.scale || 'linear';
+        if (scaleType !== 'linear') {
+            // null when the data can't support the requested scale (single value, no
+            // positive values for log, zero spread for stddev) → linear fallback below.
+            const graded = this.createGradedColorScale(colorValues, interpolator, scaleType, scaleOptions.classes);
+            if (graded) return graded;
+        }
+
         return d3.scaleSequential(interpolator)
             .domain(extent);
+    }
+
+    /**
+     * Build a non-linear colour grading scale over numeric values.
+     *
+     * The returned scale is callable like any d3 scale and carries the metadata the
+     * legend needs: `gradingType`, plus `gradingClasses` ([{min, max, color, sigmaLabel?}],
+     * a null min/max meaning open-ended) for classed scales or `gradingDomain` for log.
+     *
+     * @param {Array} values - Grading column values
+     * @param {Function} interpolator - d3 colour interpolator, t in [0, 1]
+     * @param {string} scaleType - 'quantile' | 'log' | 'pretty' | 'stddev'
+     * @param {number} classes - Class count for quantile / target count for pretty
+     * @returns {Function|null} Colour scale, or null if it cannot be built from this data
+     */
+    static createGradedColorScale(values, interpolator, scaleType, classes) {
+        const numeric = values.filter(v => typeof v === 'number' && Number.isFinite(v));
+        if (numeric.length === 0) return null;
+
+        const [min, max] = d3.extent(numeric);
+        if (min === max) return null;
+
+        if (scaleType === 'log') {
+            const [lo, hi] = d3.extent(numeric.filter(v => v > 0));
+            if (!(hi > lo)) return null;
+            const logScale = d3.scaleSequentialLog(interpolator).domain([lo, hi]);
+            // Zero / negative values have no place on a log scale — show them as "(none)".
+            const scale = v => (v > 0 ? logScale(v) : SymbolFactory.MISSING_COLOR);
+            scale.gradingType = 'log';
+            scale.gradingDomain = [lo, hi];
+            return scale;
+        }
+
+        const requested = Math.round(Number(classes)) || this.DEFAULT_GRADING_CLASSES;
+        const classCount = Math.min(this.MAX_GRADING_CLASSES, Math.max(this.MIN_GRADING_CLASSES, requested));
+
+        // thresholds: interior breaks; lower/upper: outer edges for the legend (null = open-ended).
+        let thresholds;
+        let lower = min;
+        let upper = max;
+        let sigmaLabels = null;
+
+        if (scaleType === 'quantile') {
+            const quantiles = d3.scaleQuantile().domain(numeric).range(d3.range(classCount)).quantiles();
+            // Heavily tied data repeats breaks (or puts one on the minimum), which would
+            // leave empty classes — collapse them.
+            thresholds = [...new Set(quantiles)].filter(t => t > min && t <= max);
+        } else if (scaleType === 'pretty') {
+            const edges = d3.scaleLinear().domain([min, max]).nice(classCount).ticks(classCount);
+            if (edges.length < 2) return null;
+            thresholds = edges.slice(1, -1);
+            lower = edges[0];
+            upper = edges[edges.length - 1];
+        } else if (scaleType === 'stddev') {
+            const mean = d3.mean(numeric);
+            const sd = d3.deviation(numeric);
+            if (!(sd > 0)) return null;
+            const ks = [-3, -2, -1, 0, 1, 2, 3];
+            thresholds = ks.map(k => mean + k * sd);
+            lower = null;
+            upper = null;
+            const sigma = k => (k === 0 ? 'mean' : `${k > 0 ? '+' : '−'}${Math.abs(k)}σ`);
+            sigmaLabels = [
+                `< ${sigma(ks[0])}`,
+                ...ks.slice(1).map((k, i) => `${sigma(ks[i])} to ${sigma(k)}`),
+                `> ${sigma(ks[ks.length - 1])}`
+            ];
+        } else {
+            return null;
+        }
+
+        const count = thresholds.length + 1;
+        if (count < 2) return null;
+
+        const colors = d3.range(count).map(i => interpolator(i / (count - 1)));
+        let gradingClasses = colors.map((color, i) => ({
+            min: i === 0 ? lower : thresholds[i - 1],
+            max: i === count - 1 ? upper : thresholds[i],
+            color,
+            ...(sigmaLabels ? { sigmaLabel: sigmaLabels[i] } : {})
+        }));
+
+        if (scaleType === 'stddev') {
+            // Colours stay anchored to the full ±3σ ladder (mean = scheme midpoint), but
+            // the legend only lists bands the data actually reaches.
+            gradingClasses = gradingClasses.filter(c =>
+                (c.max === null || c.max > min) && (c.min === null || c.min <= max)
+            );
+        }
+
+        const scale = d3.scaleThreshold().domain(thresholds).range(colors);
+        scale.gradingType = scaleType;
+        scale.gradingClasses = gradingClasses;
+        return scale;
     }
 
     /**
@@ -167,7 +286,8 @@ export class ScaleFactory {
                 validData,
                 colorInfo,
                 grading.scheme || 'warm-cool',
-                grading.mode === 'distinct' ? (grading.categoryColors || {}) : {}
+                grading.mode === 'distinct' ? (grading.categoryColors || {}) : {},
+                grading.mode === 'distinct' ? {} : { scale: grading.scale, classes: grading.classes }
             );
             if (!colorScale) return null;
 
@@ -270,8 +390,15 @@ export class ScaleFactory {
         const hasBarSeries = seriesInfo.some(s => s.graphType === 'bar');
         const xValues = data.map(d => d[xAxisInfo.columnName]).filter(v => v !== undefined && v !== null);
         debugLog('ScaleFactory.createScalesForGraph', 'xValues', xValues);
-        // Determine if x-axis should be categorical (band scale)
-        const isCategorical = hasBarSeries || this.shouldUseBandScale(xValues);
+        // Bounds may be partial: a blank min or max follows the data extent
+        // while the pinned side stays fixed (e.g. floor at 0.1 g/t, ceiling
+        // tracking the highest measured grade).
+        const staticXBounds = this.getStaticScaleBounds(config, 'x');
+        // Determine if x-axis should be categorical (band scale). An explicit static
+        // x scale wins over the low-cardinality heuristic: the user asked for a
+        // numeric min/max, and a band axis would ignore it (and with it the axis
+        // intercepts and tick-aligned grid). Bars still need their band scale.
+        const isCategorical = hasBarSeries || (!staticXBounds && this.shouldUseBandScale(xValues));
 
         let xScale;
         const scaleType = this.inferScaleType(xValues);
@@ -299,10 +426,6 @@ export class ScaleFactory {
         } else {
             // Create linear (or log) scale for continuous data
             const xExtent = d3.extent(xValues, d => +d);
-            // Bounds may be partial: a blank min or max follows the data extent
-            // while the pinned side stays fixed (e.g. floor at 0.1 g/t, ceiling
-            // tracking the highest measured grade).
-            const staticXBounds = this.getStaticScaleBounds(config, 'x');
             if (staticXBounds) {
                 if (config.logX) {
                     const positiveXValues = xValues.filter(v => +v > 0);
