@@ -26,10 +26,10 @@ export class ConfigValidator {
     static VALID_AXIS_INTERCEPTS = ['minimum', 'origin', 'custom'];
     static VALID_FIT_TYPES = ['polynomial', 'power_law', 'best_fit', 'custom'];
     static VALID_BAR_MODES = ['group', 'stack'];
-    static COLOR_HEX_RE = /^#[0-9a-fA-F]{6}$/;
+    static COLOR_HEX_RE = /^#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/;
 
     /**
-     * Validate a CSS hex color string (#rrggbb)
+     * Validate a CSS hex color string (#rrggbb or the #rgb shorthand)
      * @param {string} color - Color string to validate
      * @param {string} [field='color'] - Field name for error messages
      * @throws {ValidationError} If color is not a valid hex string
@@ -159,7 +159,9 @@ export class ConfigValidator {
 
         // Validate polynomial order
         if (curveFit.fitType === 'polynomial') {
-            const order = curveFit.order ? parseInt(curveFit.order, 10) : 1;
+            // Only a missing order defaults to 1. A falsy check would turn 0 into 1 and accept it.
+            const hasOrder = curveFit.order !== undefined && curveFit.order !== null && curveFit.order !== '';
+            const order = hasOrder ? parseInt(curveFit.order, 10) : 1;
             if (isNaN(order) || order < 1 || order > 10) {
                 throw new ValidationError(
                     'Polynomial order must be an integer between 1 and 10',

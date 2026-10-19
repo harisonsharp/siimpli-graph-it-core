@@ -19,6 +19,7 @@ import { UnifiedTableRenderer } from '../rendering/UnifiedTableRenderer.js';
 import { BiasTableRenderer } from '../rendering/BiasTableRenderer.js';
 import { alignFooterTables } from '../rendering/tableLayout.js';
 import { BaseChartRenderer } from '../rendering/ChartRenderers/BaseChartRenderer.js';
+import { applyDerivedSeries } from '../utils/derivedSeries.js';
 
 /**
  * Parses column identifiers from configuration.
@@ -579,6 +580,13 @@ export function renderGraph({
             return { success: false, error: 'No series configured' };
         }
 
+        // Derived series become extra rows tagged _sourceFile '__derived__'. A bad
+        // formula only blanks its own series, so the rest of the graph still draws.
+        const derived = applyDerivedSeries(csvData, graphConfig, { joinXAxis: globalSettings?.joinXAxis });
+        csvData = derived.data;
+        const derivedErrors = derived.errors;
+        derivedErrors.forEach(e => debugWarn(`Derived series "${e.key}" skipped: ${e.message}`));
+
         const svg = d3.select(svgNode);
         svg.selectAll('*').remove();
         // The hover-dim class sits on the SVG root, so clearing children doesn't reset it.
@@ -679,7 +687,8 @@ export function renderGraph({
                 validData,
                 columnInfo,
                 dimensions,
-                targetGraphConfig
+                targetGraphConfig,
+                derivedErrors
             };
         }
 
@@ -752,7 +761,8 @@ export function renderGraph({
             scales,
             columnInfo,
             dimensions,
-            targetGraphConfig
+            targetGraphConfig,
+            derivedErrors
         };
     } catch (error) {
         debugWarn('Failed to render graph:', error);

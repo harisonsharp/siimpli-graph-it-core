@@ -5,14 +5,17 @@ import { fileURLToPath } from 'node:url';
 import * as d3 from 'd3';
 import { renderGraph } from './renderGraph.js';
 
+const openerMock = vi.hoisted(() => ({ openPath: vi.fn(), openUrl: vi.fn() }));
+vi.mock('@tauri-apps/plugin-opener', () => openerMock);
+
 describe('renderGraph integration tests', () => {
     let svg;
     let csvData;
-    // Fixture lives in the sibling siimpli-graph-it checkout, under data/spring-2026/
-    // since that repo's data folders were grouped by season. Resolved from this file
-    // rather than process.cwd() so the suite works whatever directory vitest runs in.
+    // Fixture copied into this repo from the retired siimpli-graph-it app's
+    // data/spring-2026/concentrates/, whose data folder no longer exists. Resolved
+    // from this file rather than process.cwd() so the suite works from any directory.
     const here = path.dirname(fileURLToPath(import.meta.url));
-    const dataPath = path.resolve(here, '../../../siimpli-graph-it/data/spring-2026/concentrates/copper.csv');
+    const dataPath = path.resolve(here, '__fixtures__/copper.csv');
     
     beforeAll(() => {
         const fileContent = fs.readFileSync(dataPath, 'utf8');
@@ -311,9 +314,11 @@ describe('renderGraph integration tests', () => {
         // We'll just verify no crashes occur as this handles deep D3 operations
     });
 
-    it('Point click opens linked PDF when pdfLinking is configured', () => {
+    it('Point click opens linked PDF when pdfLinking is configured', async () => {
+        // Two rows, because renderGraph draws a placeholder instead of dots below 2 points.
         const sampleData = [
-            { year: 2020, cu_grade_pct: 1.23, report_id: 'report_2020' }
+            { year: 2020, cu_grade_pct: 1.23, report_id: 'report_2020' },
+            { year: 2021, cu_grade_pct: 1.31, report_id: 'report_2021' }
         ];
 
         const config = {
@@ -329,6 +334,8 @@ describe('renderGraph integration tests', () => {
             series: [{ yAxis: 'cu_grade_pct', type: 'scatter' }]
         };
 
+        openerMock.openPath.mockClear();
+        openerMock.openPath.mockResolvedValue(undefined);
         const openSpy = vi.spyOn(window, 'open').mockReturnValue(null);
 
         const result = renderGraph({
@@ -346,8 +353,11 @@ describe('renderGraph integration tests', () => {
 
         dot.dispatchEvent(new MouseEvent('click', { bubbles: true }));
 
-        expect(openSpy).toHaveBeenCalledTimes(1);
-        expect(openSpy.mock.calls[0][0]).toBe('file:///C:/Reports/ProjectA/report_2020.pdf');
+        // The click handler opens the file asynchronously through the Tauri opener plugin.
+        await vi.waitFor(() => expect(openerMock.openPath).toHaveBeenCalledTimes(1));
+        expect(openerMock.openPath).toHaveBeenCalledWith('C:\\Reports\\ProjectA\\report_2020.pdf');
+        // Local files never fall back to file:// navigation, which Tauri blocks.
+        expect(openSpy).not.toHaveBeenCalled();
 
         openSpy.mockRestore();
     });

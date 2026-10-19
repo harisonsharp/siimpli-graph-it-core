@@ -1,4 +1,5 @@
 import { parseColumnId } from './columnUtils.js';
+import { applyDerivedSeries } from './derivedSeries.js';
 import { debugLog, debugWarn } from './debug.js';
 
 // ---------------------------------------------------------------------------
@@ -992,7 +993,9 @@ export const fitPolynomial = (data, order) => {
         throw new Error(`Failed to construct normal equations: ${error.message}`);
     }
 
-    // Check condition number via pivot ratio from forward elimination (cheap surrogate for ||A||·||A⁻¹||)
+    // Check condition number via pivot ratio from forward elimination (cheap surrogate for ||A||·||A⁻¹||).
+    // Declared outside the block because the result object below reports it.
+    let conditionEstimate;
     {
         const work = matrix.map(row => [...row]);
         let maxPivot = 0;
@@ -1011,7 +1014,7 @@ export const fitPolynomial = (data, order) => {
                 for (let k = i; k < n; k++) work[j][k] -= factor * work[i][k];
             }
         }
-        const conditionEstimate = minPivot > 0 ? maxPivot / minPivot : Infinity;
+        conditionEstimate = minPivot > 0 ? maxPivot / minPivot : Infinity;
         if (conditionEstimate > 1e12) {
             debugWarn(`Matrix is poorly conditioned (pivot ratio: ${conditionEstimate.toExponential(2)}). Results may be unreliable.`);
         }
@@ -1435,6 +1438,9 @@ export const performCurveFitting = (csvData, config, curveFits) => {
         debugWarn('Invalid input parameters for curve fitting');
         return curveFits;
     }
+
+    // Fits on a derived series need its computed rows. renderGraph reports formula errors.
+    csvData = applyDerivedSeries(csvData, config).data;
 
     // Parse column information to get actual column names
     const xAxisInfo = parseColumnId(config.xAxis);

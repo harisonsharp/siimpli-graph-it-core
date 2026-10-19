@@ -287,16 +287,17 @@ describe('CanvasSizer', () => {
     });
 
     describe('updateFromDOM (fallback path)', () => {
-        it('should use getBBox from DOM', (done) => {
+        // Awaited rather than a done callback: vitest does not wait for done, so the
+        // assertions used to run after the next beforeEach had replaced mockSVG.
+        it('should use getBBox from DOM', async () => {
             sizer.updateFromDOM();
 
             // Wait for requestAnimationFrame
-            setTimeout(() => {
-                expect(mockSVG.querySelector).toHaveBeenCalled();
-                expect(sizer.lastExtents).toBeDefined();
-                expect(sizer.lastExtents.source).toBe('dom');
-                done();
-            }, 50);
+            await new Promise(resolve => setTimeout(resolve, 50));
+
+            expect(mockSVG.querySelector).toHaveBeenCalled();
+            expect(sizer.lastExtents).toBeDefined();
+            expect(sizer.lastExtents.source).toBe('dom');
         });
 
         it('should warn if no group element found', () => {

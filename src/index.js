@@ -14,6 +14,7 @@ export * from './utils/dataUtils.js';
 export * from './utils/colorUtils.js'
 export * from './utils/columnUtils.js';
 export * from './utils/curveFittingUtils.js';
+export * from './utils/derivedSeries.js';
 export * from './utils/dualAxisUtils.js';
 export * from './utils/histogram.js';
 export * from './utils/parseCSV.js';
