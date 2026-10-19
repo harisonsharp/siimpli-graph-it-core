@@ -291,3 +291,47 @@ describe('Series-column collapse', () => {
         expect(draw(one, 2).width).toBeLessThan(draw(both, 2).width);
     });
 });
+
+describe('most-recent value on a dataset that UNIONs row kinds', () => {
+    // Shape of the shared metal price chart: monthly market rows and report rows share the x
+    // column, and each kind leaves the other's columns blank ('' from parseCSV).
+    const rows = [
+        { head: 1, spot: 10, mean: '' },
+        { head: 2, spot: '', mean: 7 },
+        { head: 3, spot: 12, mean: '' },
+    ];
+    const config = {
+        xAxisLabel: 'Date',
+        series: [
+            { graphType: 'line', yAxis: 'spot::data.csv', titleName: 'Spot' },
+            { graphType: 'line', yAxis: 'mean::data.csv', titleName: 'Mean' },
+        ],
+    };
+    const valueOf = (title) => UnifiedTableRenderer._prepareRowData(
+        rows, config.series.map((s) => ({ ...s })), xAxisInfo, scales, null, config,
+    ).find((r) => r.label === title)?.value;
+
+    it('skips blank cells instead of stopping on them', () => {
+        expect(valueOf('Mean')).toBe(7);
+    });
+
+    it('still reads the latest row when it does carry the series', () => {
+        expect(valueOf('Spot')).toBe(12);
+    });
+});
+
+describe('_formatPrimaryValue', () => {
+    it('keeps two decimals at ordinary magnitudes', () => {
+        expect(UnifiedTableRenderer._formatPrimaryValue(1.6301)).toBe('1.63');
+        expect(UnifiedTableRenderer._formatPrimaryValue(4418.5445)).toBe('4418.54');
+        expect(UnifiedTableRenderer._formatPrimaryValue(0.95)).toBe('0.95');
+        expect(UnifiedTableRenderer._formatPrimaryValue(0)).toBe('0.00');
+    });
+
+    it('shows three significant figures below 0.1 instead of rounding them away', () => {
+        // Iron ore in US$/lb.
+        expect(UnifiedTableRenderer._formatPrimaryValue(0.0461)).toBe('0.0461');
+        expect(UnifiedTableRenderer._formatPrimaryValue(0.04987)).toBe('0.0499');
+        expect(UnifiedTableRenderer._formatPrimaryValue(-0.0123)).toBe('-0.0123');
+    });
+});

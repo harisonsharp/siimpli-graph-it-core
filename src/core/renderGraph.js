@@ -11,6 +11,7 @@ import { parseColumnId } from '../utils/columnUtils.js';
 import { drawAxes } from '../utils/axisUtils.js';
 import { renderLogo } from '../rendering/LogoRenderer.js';
 import { generateTitle } from '../utils/dataUtils.js';
+import { fillDataTokens } from '../utils/dataTokens.js';
 import { ScaleFactory } from '../rendering/ScaleFactory.js';
 import { groupSeriesByAxis, getAxisColor, getAxisLabel } from '../utils/dualAxisUtils.js';
 import { debugLog, debugWarn } from '../utils/debug.js';
@@ -271,6 +272,90 @@ function renderProjectName(svg, config, dimensions, title) {
     });
 }
 
+// Footnote: a note on method or data, set in small grey text under the plot where
+// published charts carry their notes (graph.footnote, opt-in). "\n" forces a line
+// break and long lines wrap to the plot width by character count, as legend labels
+// do. Its position is worked out from the x-axis labels rather than measured: the
+// headless DOM cannot measure text, and working it out keeps the server PNG and the
+// in-app chart identical.
+const FOOTNOTE_FONT_SIZE = 12;
+const FOOTNOTE_LINE_HEIGHT = 16;
+const FOOTNOTE_GAP = 14;        // below the x-axis labels or axis title
+const FOOTNOTE_CLEARANCE = 16;  // kept between the footnote and a legend or table under it
+const CHAR_WIDTH_EM = 0.6;      // the per-character width the headless DOM shims assume
+
+// Text fields that may carry {column} tokens filled from the chart's data.
+const DATA_TOKEN_FIELDS = ['title', 'subtitle', 'provenanceNote', 'footnote'];
+
+/**
+ * How far below the top of the plot group the x-axis reaches, labels and title included.
+ * Band-scale (and short date-axis) tick labels are drawn at -45°, end-anchored at their
+ * tick (drawXAxis), so their depth follows the longest label.
+ */
+function xAxisDepth(g, dimensions, axisInfo = {}) {
+    const xAxisY = Number.isFinite(axisInfo.xAxisY) ? axisInfo.xAxisY : dimensions.height;
+    const labels = g.selectAll('.x-axis .tick text').nodes();
+    const rotated = labels.some(node => /rotate/.test(node.getAttribute('transform') || ''));
+    const longest = labels.reduce((max, node) => Math.max(max, (node.textContent || '').length), 0);
+
+    // Upright: tick, padding and one 12px line. Rotated: the label's run plus one line
+    // height, both turned through 45°, below the tick and padding.
+    let depth = rotated
+        ? 12 + (longest * CHAR_WIDTH_EM * 12 + 12) * Math.SQRT1_2
+        : 24;
+
+    const axisTitle = g.select('.x-axis-label');
+    if (!axisTitle.empty() && axisTitle.text().trim()) {
+        // drawLabels puts the 14px title's baseline 10px past the label offset.
+        depth = Math.max(depth, (axisInfo.xAxisLabelOffset ?? 50) + 10 + 5);
+    }
+    return Math.max(dimensions.height, xAxisY + depth);
+}
+
+/** Split one paragraph into lines of at most maxChars, breaking between words. */
+function wrapByChars(paragraph, maxChars) {
+    const lines = [];
+    let line = '';
+    paragraph.split(/\s+/).filter(Boolean).forEach((word) => {
+        if (line && line.length + 1 + word.length > maxChars) {
+            lines.push(line);
+            line = word;
+        } else {
+            line = line ? `${line} ${word}` : word;
+        }
+    });
+    if (line) lines.push(line);
+    return lines;
+}
+
+/**
+ * Draws graph.footnote under the plot, left-aligned with it, one <text> per line.
+ * @returns {number|null} y of the footnote's bottom edge, or null when there is none
+ */
+function renderFootnote(svg, g, config, dimensions, axisInfo) {
+    const text = (config.footnote || '').trim();
+    if (!text) return null;
+
+    const { margin, width } = dimensions;
+    const maxChars = Math.max(20, Math.floor(width / (CHAR_WIDTH_EM * FOOTNOTE_FONT_SIZE)));
+    const lines = text.split(/\r?\n/).flatMap(paragraph => wrapByChars(paragraph, maxChars));
+    const firstBaseline = margin.top + xAxisDepth(g, dimensions, axisInfo) + FOOTNOTE_GAP + FOOTNOTE_FONT_SIZE;
+
+    const footnote = svg.append('g').attr('class', 'graph-footnote');
+    lines.forEach((line, i) => {
+        footnote.append('text')
+            .attr('x', margin.left)
+            .attr('y', firstBaseline + i * FOOTNOTE_LINE_HEIGHT)
+            .style('font-family', 'sans-serif')
+            .style('font-size', `${FOOTNOTE_FONT_SIZE}px`)
+            .style('fill', '#666')
+            .text(line);
+    });
+
+    // The last line's baseline plus its descenders.
+    return firstBaseline + (lines.length - 1) * FOOTNOTE_LINE_HEIGHT + 4;
+}
+
 /**
  * Renders axes.
  */
@@ -503,7 +588,7 @@ function renderLegends(svg, validData, scales, columnInfo, config, dimensions, s
     const { seriesColorScale, colorScale } = scales;
     const { seriesInfo, graphType, colorInfo } = columnInfo;
     const { margin = { top: 0, right: 0, bottom: 0, left: 0 } } = dimensions;
-    const { contour = null, curve = null, axisInfo = {} } = legendArtifacts;
+    const { contour = null, curve = null, axisInfo = {}, footerTop = 0 } = legendArtifacts;
 
     if (colorScale && colorInfo?.columnName) {
         const colorValues = validData.map(d => d[colorInfo.columnName]).filter(v => v !== undefined && v !== null);
@@ -515,13 +600,17 @@ function renderLegends(svg, validData, scales, columnInfo, config, dimensions, s
         }
     }
 
+    // Series whose category colours the series legend shows on its symbols; their
+    // colour-grading panels below would only repeat them.
+    let gradingInSeriesLegend = new Set();
     if (graphType !== 'histogram' && seriesInfo.length > 1 && seriesColorScale) {
         const hasSecondaryAxis = config.series && (config.series.some(s => s.axisAssignment === 'secondary') || config.dualUnits);
         const legendOffset = hasSecondaryAxis ? 140 : 60;
-        LegendRenderer.drawSeriesLegend(
+        gradingInSeriesLegend = LegendRenderer.drawSeriesLegend(
             config, svg, validData, seriesInfo, seriesColorScale,
-            settings.graphDimensions, margin, legendOffset
-        );
+            settings.graphDimensions, margin, legendOffset,
+            { minTop: footerTop, seriesColorScales: scales.seriesColorScales }
+        ) || new Set();
     }
 
     if (contour && contour.thresholds?.length) {
@@ -533,7 +622,7 @@ function renderLegends(svg, validData, scales, columnInfo, config, dimensions, s
     // Per-series colour grading legends (floating panels in right margin)
     if (scales.seriesColorScales) {
         LegendRenderer.drawColorGradingLegends(
-            svg, seriesInfo, scales.seriesColorScales, validData, dimensions
+            svg, seriesInfo, scales.seriesColorScales, validData, dimensions, gradingInSeriesLegend
         );
     }
 }
@@ -608,6 +697,11 @@ export function renderGraph({
         svg.attr('viewBox', null);
 
         let targetGraphConfig = { ...graphConfig, _isBatchMode: isBatchMode };
+        for (const key of DATA_TOKEN_FIELDS) {
+            if (typeof targetGraphConfig[key] === 'string') {
+                targetGraphConfig[key] = fillDataTokens(targetGraphConfig[key], csvData);
+            }
+        }
         let additionalJoinCols = targetGraphConfig.joinColumns || [];
         if (additionalJoinCols.length === 0 && targetGraphConfig.xAxis2) {
             additionalJoinCols = [targetGraphConfig.xAxis2];
@@ -720,18 +814,24 @@ export function renderGraph({
                 .attr('height', 52);
         }
 
+        // The footnote takes the band between the x-axis labels and the legend or
+        // footer tables; when it runs long they drop below it instead of overlapping.
+        const footnoteBottom = renderFootnote(svg, g, targetGraphConfig, dimensions, axisInfo);
+        const footerTop = footnoteBottom === null ? 0 : footnoteBottom + FOOTNOTE_CLEARANCE;
+        const footerDimensions = footerTop ? { ...dimensions, minFooterTop: footerTop } : dimensions;
+
         if (globalSettings.showUnifiedTable && globalSettings.showStaticTable) {
             // The legend table auto-fits its text columns, so its width is only known after
             // it draws — hence the measurement rather than the 365px constant this used to
             // pass, which overlapped the bias table by ~15px on charts carrying 10+
             // categories and left a gap on charts carrying few.
             const unifiedTableWidth = UnifiedTableRenderer.drawUnifiedTable(
-                svg, validData, columnInfo, scales, targetGraphConfig, globalSettings, dimensions
+                svg, validData, columnInfo, scales, targetGraphConfig, globalSettings, footerDimensions
             );
 
             if (globalSettings.showBiasTable && globalSettings.biasTableData) {
                 BiasTableRenderer.drawBiasTable(
-                    svg, globalSettings.biasTableData, dimensions, globalSettings,
+                    svg, globalSettings.biasTableData, footerDimensions, globalSettings,
                     unifiedTableWidth > 0 ? unifiedTableWidth : 365
                 );
 
@@ -748,7 +848,7 @@ export function renderGraph({
             renderLegends(
                 svg, validData, scales, columnInfo, targetGraphConfig,
                 dimensions, globalSettings, graphService,
-                { contour: contourLegend, curve: curveLegend, axisInfo }
+                { contour: contourLegend, curve: curveLegend, axisInfo, footerTop }
             );
         }
 

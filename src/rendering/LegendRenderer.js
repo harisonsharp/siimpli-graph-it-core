@@ -110,7 +110,7 @@ export class LegendRenderer {
      * @param {Array} validData - Filtered valid data (for extracting color column values)
      * @param {Object} dimensions - { width, height, margin }
      */
-    static drawColorGradingLegends(svg, seriesInfo, seriesColorScales, validData, dimensions) {
+    static drawColorGradingLegends(svg, seriesInfo, seriesColorScales, validData, dimensions, carriedBySeriesLegend = new Set()) {
         if (!seriesInfo || !seriesColorScales) return;
         const { width, height, margin } = dimensions;
         const panelX = margin.left + width + 12;
@@ -123,7 +123,8 @@ export class LegendRenderer {
 
         seriesInfo.forEach((series, i) => {
             const grading = seriesColorScales[i];
-            if (!grading) return;
+            // Skipped when the series legend already shows these colours on its symbols.
+            if (!grading || carriedBySeriesLegend.has(i)) return;
 
             const { colorScale, colorInfo, mode } = grading;
             if (!colorScale || !colorInfo?.columnName) return;
@@ -359,19 +360,24 @@ export class LegendRenderer {
      * Draws the main series legend (lines, markers, etc).
      */
 
-    static drawSeriesLegend(graphConfig, svg, validData, seriesInfo, colorScale, graphDimensions, margin, xOffset = 90) {
+    static drawSeriesLegend(graphConfig, svg, validData, seriesInfo, colorScale, graphDimensions, margin, xOffset = 90, { minTop = 0, seriesColorScales = null } = {}) {
         // Legend placement. Defaults to bottom-left (below the plot); 'top-right' / 'bottom-right'
         // tuck it into a chart corner — set via graphConfig.legendPosition in the template.
+        // minTop keeps a bottom legend under anything drawn beneath the plot (a footnote).
+        // Returns the indices of series whose category colours this legend carries, so the
+        // caller can skip their separate colour-grading panels (see drawColorGradingLegends).
+        const carriesGrading = new Set();
         const LEGEND_W = 150; // rough first-guess width, used only until the real content is measured below
         const RIGHT_EDGE_PAD = 15; // breathing room kept between the legend text and the canvas edge
         const legendPosition = graphConfig?.legendPosition || 'bottom-left';
+        const bottomY = Math.max(margin.top + graphDimensions.height - margin.bottom / 2, minTop);
         let legendTransform;
         if (legendPosition === 'top-right') {
             legendTransform = `translate(${margin.left + graphDimensions.width - LEGEND_W}, ${margin.top + 10})`;
         } else if (legendPosition === 'bottom-right') {
-            legendTransform = `translate(${margin.left + graphDimensions.width - LEGEND_W}, ${margin.top + graphDimensions.height - margin.bottom / 2})`;
+            legendTransform = `translate(${margin.left + graphDimensions.width - LEGEND_W}, ${bottomY})`;
         } else {
-            legendTransform = `translate(${margin.left}, ${margin.top + graphDimensions.height - margin.bottom / 2})`;
+            legendTransform = `translate(${margin.left}, ${bottomY})`;
         }
         const legend = svg.append("g").attr("transform", legendTransform);
 
@@ -383,7 +389,7 @@ export class LegendRenderer {
         if (graphConfig.barMode === 'stack-proportional' && seriesInfo.length > 1 && seriesInfo.some(s => s.graphType !== 'bar')) {
             stackProportionalLegend = true;
         }
-        seriesInfo.forEach((series, _i) => {
+        seriesInfo.forEach((series, seriesIndex) => {
             if (series.color==='white'){
                 return;
             }
@@ -409,20 +415,25 @@ export class LegendRenderer {
             let subItems = [];
 
             if (series.graphType === 'scatter' && uniqueValues && uniqueValues.length > 0) {
-                // Ensure we have a map. If not provided on series object, generate it on the fly (failsafe)
-
+                // When the series' distinct colours come from the same column as its symbols,
+                // each entry takes its category's colour (the lookup getPointColor uses), so
+                // one legend explains both and the separate colour panel is dropped.
+                const grading = seriesColorScales?.[seriesIndex];
+                const gradedByCategory = grading?.mode === 'distinct'
+                    && grading.colorInfo?.columnName === series.filterColumn?.split('::')[0];
+                if (gradedByCategory) carriesGrading.add(seriesIndex);
 
                 subItems = uniqueValues.map(val => {
                     const isMissing = val === SymbolFactory.MISSING_CATEGORY;
                     const displayVal = isMissing ? SymbolFactory.MISSING_LABEL : val;
+                    let color = ScaleFactory.resolveColor(series.color) || colorScale(series.yAxisInfo.columnName);
+                    if (gradedByCategory) color = grading.colorScale(val);
                     return {
                         label: `${series.titleName} - ${displayVal}`, // Requirement: Series Name - Unique Value
                         shapeType: 'symbol',
                         symbol: SymbolFactory.getSymbol(val, symbolMap),
-                        // The (none) group uses the shared neutral color; graded groups keep the series color.
-                        color: isMissing
-                            ? SymbolFactory.MISSING_COLOR
-                            : (ScaleFactory.resolveColor(series.color) || colorScale(series.yAxisInfo.columnName))
+                        // The (none) group uses the shared neutral color.
+                        color: isMissing ? SymbolFactory.MISSING_COLOR : color
                     };
                 });
             } else {
@@ -545,6 +556,8 @@ export class LegendRenderer {
                 // getBBox unavailable (e.g. headless/jsdom rendering) — keep the LEGEND_W estimate.
             }
         }
+
+        return carriesGrading;
     }
 }
 

@@ -540,3 +540,175 @@ describe('renderGraph header layout', () => {
         });
     });
 });
+
+describe('renderGraph footnote', () => {
+    let svg;
+
+    beforeEach(() => {
+        document.body.innerHTML = '';
+        svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+        document.body.appendChild(svg);
+    });
+
+    const settings = {
+        graphDimensions: { width: 1100, height: 600 },
+        colorScheme: 'default',
+        barType: 'stack'
+    };
+
+    // Pre-binned like the powder factor chart: string bins (a band scale with
+    // rotated tick labels) and the totals repeated on every row for tokens.
+    const csvData = [
+        { bin: '0.10-0.15', pea: 1, fs: 2, assumed: 5, total: 170 },
+        { bin: '0.15-0.20', pea: 9, fs: 5, assumed: 5, total: 170 },
+        { bin: '0.20-0.25', pea: 12, fs: 12, assumed: 5, total: 170 }
+    ];
+
+    const render = (fields) => {
+        const result = renderGraph({
+            svg,
+            csvData,
+            graphConfig: {
+                graphType: 'bar',
+                barMode: 'stack',
+                xAxis: 'bin',
+                xAxisLabel: ' ',
+                title: 'Powder Factor (kg/t)',
+                series: [
+                    { graphType: 'bar', yAxis: 'pea', titleName: 'PEA', color: '#86b6ef' },
+                    { graphType: 'bar', yAxis: 'fs', titleName: 'FS', color: '#0d366b' }
+                ],
+                ...fields
+            },
+            globalSettings: settings,
+            colorSchemes: { default: ['#1f77b4'] }
+        });
+        expect(result.success).toBe(true);
+        return result;
+    };
+
+    const footnoteLines = () => [...svg.querySelectorAll('g.graph-footnote text')].map(el => ({
+        text: el.textContent,
+        x: Number(el.getAttribute('x')),
+        y: Number(el.getAttribute('y'))
+    }));
+
+    // The series legend is the top-level group holding the series names.
+    const legendTop = () => {
+        const group = [...svg.children].find(el => el.tagName === 'g' && el.textContent.includes('PEA'));
+        return Number(/translate\([^,]+,\s*([\d.]+)\)/.exec(group.getAttribute('transform'))[1]);
+    };
+
+    it('draws nothing when the chart has no footnote', () => {
+        render({});
+        expect(svg.querySelector('g.graph-footnote')).toBeNull();
+    });
+
+    it('sets each line left-aligned under the rotated x-axis labels and above the legend', () => {
+        render({});
+        const defaultLegendTop = legendTop();
+
+        const { dimensions } = render({ footnote: 'Note: first line.\nSecond line.' });
+        const lines = footnoteLines();
+        expect(lines.map(line => line.text)).toEqual(['Note: first line.', 'Second line.']);
+        lines.forEach(line => expect(line.x).toBe(dimensions.margin.left));
+
+        // Below the longest rotated label (9 characters at -45°), not on top of it.
+        const plotBottom = dimensions.margin.top + dimensions.height;
+        expect(svg.querySelector('.x-axis .tick text').getAttribute('transform')).toContain('rotate');
+        expect(lines[0].y).toBeGreaterThan(plotBottom + 9 * 7.2 * Math.SQRT1_2);
+        expect(lines[1].y).toBeGreaterThan(lines[0].y);
+
+        // Two lines fit in the band above the legend, so the legend stays put.
+        expect(legendTop()).toBe(defaultLegendTop);
+        expect(lines[1].y).toBeLessThan(defaultLegendTop);
+    });
+
+    it('moves the legend down rather than letting a long footnote overlap it', () => {
+        render({ footnote: ['one', 'two', 'three', 'four', 'five', 'six'].join('\n') });
+        const lines = footnoteLines();
+        expect(lines).toHaveLength(6);
+        expect(legendTop()).toBeGreaterThan(lines[5].y + 4);
+    });
+
+    it('wraps a line longer than the plot is wide', () => {
+        const { dimensions } = render({ footnote: 'word '.repeat(60).trim() });
+        const lines = footnoteLines();
+        expect(lines.length).toBeGreaterThan(1);
+        lines.forEach(line => expect(line.text.length * 0.6 * 12).toBeLessThanOrEqual(dimensions.width));
+    });
+
+    it('fills {column} tokens from the data and leaves unknown ones as written', () => {
+        render({
+            title: 'Powder Factor ({total} reports)',
+            footnote: '2.7 t/m³ assumed for {assumed} of {total} reports; {no_such_column}'
+        });
+        expect(footnoteLines()[0].text).toBe('2.7 t/m³ assumed for 5 of 170 reports; {no_such_column}');
+        expect(svg.querySelector('text.graph-title').textContent).toBe('Powder Factor (170 reports)');
+    });
+});
+
+describe('renderGraph combined category legend', () => {
+    let svg;
+
+    beforeEach(() => {
+        document.body.innerHTML = '';
+        svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+        document.body.appendChild(svg);
+    });
+
+    const categoryColors = { PEA: '#86b6ef', PFS: '#2a78d6', FS: '#0d366b' };
+
+    const csvData = [
+        { bwi: 10, pf: 0.30, median: 0.28, Study: 'PEA', Basis: 'ore' },
+        { bwi: 12, pf: 0.25, median: 0.28, Study: 'PFS', Basis: 'waste' },
+        { bwi: 14, pf: 0.33, median: 0.28, Study: 'FS', Basis: 'ore' },
+        { bwi: 16, pf: 0.27, median: 0.28, Study: 'PEA', Basis: 'waste' }
+    ];
+
+    // Like the powder factor vs BWI chart: points coloured and shaped by one column,
+    // plus a line series so the series legend is drawn at all.
+    const render = (colourColumn) => {
+        const result = renderGraph({
+            svg,
+            csvData,
+            graphConfig: {
+                graphType: 'scatter',
+                xAxis: 'bwi',
+                series: [
+                    {
+                        graphType: 'scatter', yAxis: 'pf', titleName: 'Powder factor',
+                        colorGrading: { enabled: true, mode: 'distinct', column: colourColumn, categoryColors },
+                        filter: true, filterColumn: 'Study'
+                    },
+                    { graphType: 'line', yAxis: 'median', titleName: 'Rolling median', color: '#ff6b6b' }
+                ]
+            },
+            globalSettings: { graphDimensions: { width: 1200, height: 700 }, colorScheme: 'default' },
+            colorSchemes: { default: ['#1f77b4'] }
+        });
+        expect(result.success).toBe(true);
+    };
+
+    /** Fill of each category symbol in the series legend, keyed by its label. */
+    const legendFills = () => Object.fromEntries(
+        [...svg.querySelectorAll('g > g > path')]
+            .map(path => [path.parentNode.querySelector('text')?.textContent ?? '', path.getAttribute('fill')])
+            .filter(([label]) => label.startsWith('Powder factor - '))
+    );
+
+    it('colours each symbol by its category and drops the separate colour panel', () => {
+        render('Study');
+        expect(svg.querySelector('.color-grading-legend')).toBeNull();
+        expect(legendFills()).toEqual({
+            'Powder factor - PEA': '#86b6ef',
+            'Powder factor - PFS': '#2a78d6',
+            'Powder factor - FS': '#0d366b'
+        });
+    });
+
+    it('keeps the colour panel when colours and symbols come from different columns', () => {
+        render('Basis');
+        expect(svg.querySelector('.color-grading-legend')).not.toBeNull();
+    });
+});
