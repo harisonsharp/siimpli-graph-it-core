@@ -15,6 +15,9 @@ export * from './utils/colorUtils.js'
 export * from './utils/columnUtils.js';
 export * from './utils/curveFittingUtils.js';
 export * from './utils/derivedSeries.js';
+export * from './utils/biasTable.js';
+export { windowStat, nearestStat, lowessMean, lowessStd, sampleStd } from './utils/rollingStats.js';
+export { profileSeries, recommendTrend } from './utils/trendAdvisor.js';
 export * from './utils/dualAxisUtils.js';
 export * from './utils/histogram.js';
 export * from './utils/parseCSV.js';
@@ -53,6 +56,7 @@ export * from './rendering/LegendRenderer.js';
 export * from './rendering/UnifiedTableRenderer.js';
 export * from './rendering/BiasTableRenderer.js';
 export * from './rendering/tableLayout.js';
+export * from './rendering/valuePicker.js';
 export * from './rendering/LogoRenderer.js';
 export * from './rendering/AnnotationRenderer.js';
 

@@ -41,7 +41,7 @@ import { fitCategoryLine, fitValueAt, numericCell } from '../utils/categoryFit.j
  * Rendered table structure:
  * ```
  * ┌──────────────────────────────────────────────────┐
- * │  Legend & Most Recent Values          Date: …    │
+ * │  Legend, Values at Most Recent Point   Date: …   │
  * ├────────┬───────────────────┬───────────┬─────────┤
  * │        │ Series            │ Value     │[Converted]
  * ├────────┼───────────────────┼───────────┼─────────┤
@@ -55,7 +55,7 @@ import { fitCategoryLine, fitValueAt, numericCell } from '../utils/categoryFit.j
  * so the Series column collapses into the category column and the categories take its place:
  * ```
  * ┌──────────────────────────────────────────────┐
- * │  Legend & Most Recent Values   Across: n=138 │
+ * │  Legend                        Across: n=138 │
  * ├────────┬──────────────────────┬──────────────┤
  * │        │ DepositCode          │ Median, %    │
  * ├────────┼──────────────────────┼──────────────┤
@@ -89,6 +89,48 @@ export class UnifiedTableRenderer {
 
     /** Heads the sample-size pair on the title line — how much the whole table rests on. */
     static SAMPLE_LABEL = 'Across:';
+
+    /** Width of one character of the 11px bold title, in px. A generous estimate, so a
+     * long title clears the "Date: …" pair beside it. */
+    static TITLE_CHAR_PX = 6.6;
+
+    /**
+     * The legend table's title. In the default value mode the values are read at one x,
+     * so the title says which: the most recent point, or the one the reader clicked. The
+     * median and fit modes summarise each row instead, and a table without values is a
+     * plain legend, so those keep the bare "Legend".
+     *
+     * @param {Object} graphConfig - `ignoreUnifiedValues` and `unifiedValueMode` are read.
+     * @param {number|Date|null} selectedXValue - The clicked x, or null for none.
+     * @returns {string}
+     */
+    static legendTitle(graphConfig, selectedXValue) {
+        const mode = graphConfig.unifiedValueMode || 'value';
+        if (graphConfig.ignoreUnifiedValues || mode !== 'value') return 'Legend';
+        return selectedXValue === null || selectedXValue === undefined
+            ? 'Legend, Values at Most Recent Point'
+            : 'Legend, Values at Selected Point';
+    }
+
+    /**
+     * Formats the header row's x as the "Date: 10/1/2026" (or "<x label>: 1.23") pair shown
+     * at the top right of the table.
+     * @private
+     * @param {Object} row - The `'header'` row from `_prepareRowData`.
+     * @returns {{label: string, value: string}}
+     */
+    static _formatHeaderPair(row) {
+        if (row.value instanceof Date) {
+            return {
+                label: 'Date:',
+                value: `${row.value.getMonth() + 1}/${row.value.getDate()}/${row.value.getFullYear()}`
+            };
+        }
+        return {
+            label: `${row.label}:`,
+            value: typeof row.value === 'number' ? row.value.toFixed(2) : String(row.value ?? '')
+        };
+    }
 
     /**
      * Builds a content-fitted column width: the longest displayed string across the given rows,
@@ -235,7 +277,9 @@ export class UnifiedTableRenderer {
         // place something to the RIGHT of this table (BiasTableRenderer) otherwise have to
         // guess it — and a guess goes wrong the moment a column auto-fits differently or
         // the Series column collapses away.
-        return this._drawTableContent(tableGroup, rowData, seriesInfo, seriesColorScale, graphConfig);
+        return this._drawTableContent(
+            tableGroup, rowData, seriesInfo, seriesColorScale, graphConfig, selectedXValue
+        );
     }
 
     /**
@@ -876,7 +920,7 @@ export class UnifiedTableRenderer {
      *   `toUnits`, `scaleFactor`, `yAxisLabel`, `unifiedValueMode` and `keepSeriesColumn`.
      * @returns {number} The table's total rendered width in px.
      */
-    static _drawTableContent(group, rowData, seriesInfo, seriesColorScale, graphConfig) {
+    static _drawTableContent(group, rowData, seriesInfo, seriesColorScale, graphConfig, selectedXValue = null) {
         group.selectAll('*').remove();
         debugLog('UnifiedTableRenderer.drawTableContent - Start of method', {
             group,
@@ -1013,9 +1057,22 @@ export class UnifiedTableRenderer {
         const sampleWidth = sampleText
             ? (UnifiedTableRenderer.SAMPLE_LABEL.length + sampleText.length) * headerCharPx + 8
             : 0;
-        const valueEndX = colX('value') + colW('value') - 2;
+        // The title names the point the values are read at, so it is long enough to run
+        // into the "Date: …" pair on a narrow table. The pair then moves right, past the
+        // title, and the table widens to hold it. The room is set by the longer of the two
+        // titles, so the table keeps its width when a click switches between them.
+        const title = this.legendTitle(graphConfig, selectedXValue);
+        const titleChars = Math.max(title.length, this.legendTitle(graphConfig, null).length);
+        const titleClearanceX = 10 + titleChars * UnifiedTableRenderer.TITLE_CHAR_PX + 12;
+        const xPair = showValues && headerRow ? this._formatHeaderPair(headerRow) : null;
+        const xPairWidth = xPair ? (xPair.label.length + xPair.value.length) * headerCharPx + 8 : 0;
+        const valueEndX = Math.max(
+            colX('value') + colW('value') - 2,
+            xPair ? titleClearanceX + xPairWidth : 0
+        );
         const totalWidth = Math.max(
             acc + 10,
+            valueEndX + 10,
             sampleWidth ? valueEndX + UnifiedTableRenderer.PAIR_GAP_PX + sampleWidth + 10 : 0
         );
 
@@ -1040,12 +1097,7 @@ export class UnifiedTableRenderer {
             .style('font-size', '11px')
             .style('font-weight', 'bold')
             .style('fill', '#666')
-            .text(`Legend`, 
-                graphConfig.ignoreUnifiedValues 
-                    ? `` 
-                    : `& Most Recent Values`
-                ); 
-                // if we ignore values, we aren't interested in the most recent values!
+            .text(title);
 
         currentY += 18;
 
@@ -1104,16 +1156,7 @@ export class UnifiedTableRenderer {
                     // no vertical space in the data area. Anchored to the value column so it
                     // sits above the values regardless of which category columns are present.
 
-                    const headerLabel = row.value instanceof Date
-                        ? `Date:`
-                        : `${row.label}:`;
-
-                    const xValueFormatted = row.value instanceof Date
-                        ? `${row.value.getMonth() + 1}/${row.value.getDate()}/${row.value.getFullYear()}`
-                        : (typeof row.value === 'number'
-                            ? row.value.toFixed(2)
-                            : row.value
-                        );
+                    const { label: headerLabel, value: xValueFormatted } = this._formatHeaderPair(row);
 
                     // The value is right-aligned at the end of the value column and the label
                     // ends just left of it, growing leftward into the empty strip between the
@@ -1121,7 +1164,6 @@ export class UnifiedTableRenderer {
                     // would reach back into the title, so a long x-axis label (e.g.
                     // "Gold Grade in Concentrate (g/t):") can't overprint the value or title.
                     const { charPx } = UnifiedTableRenderer.LAYOUT;
-                    const titleClearanceX = 60; // right edge of the bold "Legend" title, plus a gap
 
                     // Draws one right-aligned "Label: value" pair ending at `endX`. The label
                     // grows leftward and truncates only if it would reach back into the

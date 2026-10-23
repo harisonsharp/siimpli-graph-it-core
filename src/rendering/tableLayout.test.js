@@ -1,7 +1,7 @@
 /**
- * Covers the footer block's vertical placement: two tables of different heights read as one
- * unit only when they finish on the same line, and the block as a whole has to be anchorable
- * below whatever sits above it (the x-axis title, on the flotation advice charts).
+ * Covers the footer block's vertical placement: the legend and bias tables start on one top
+ * edge, and the block as a whole has to be anchorable below whatever sits above it (the
+ * x-axis title, on the flotation advice charts).
  *
  * Positions are asserted from the group `transform` and the background rect's `height`
  * attribute — the same attributes the code reads, and the only ones that exist under jsdom,
@@ -36,20 +36,20 @@ function positionOf(svg, className) {
 }
 
 describe('alignFooterTables', () => {
-    it('drops the shorter table so both bottom edges meet, leaving the taller one where it was', () => {
+    it('lifts the lower table to the higher top, so both top edges meet', () => {
         const svg = buildSvg([
-            { className: 'unified-table-group', x: 120, y: 1000, height: 100 },
-            { className: 'bias-table-group', x: 400, y: 1000, height: 260 }
+            { className: 'unified-table-group', x: 120, y: 1000, height: 260 },
+            { className: 'bias-table-group', x: 400, y: 1160, height: 100 }
         ]);
 
         const block = alignFooterTables(svg);
 
         expect(block).toEqual({ top: 1000, bottom: 1260, height: 260 });
-        expect(positionOf(svg, 'unified-table-group')).toEqual({ x: 120, y: 1160 });
+        expect(positionOf(svg, 'unified-table-group')).toEqual({ x: 120, y: 1000 });
         expect(positionOf(svg, 'bias-table-group')).toEqual({ x: 400, y: 1000 });
     });
 
-    it('anchors the TALLEST table at topY and hangs the other from the shared bottom', () => {
+    it('puts every table top at topY; the block ends at the bottom of the tallest', () => {
         const svg = buildSvg([
             { className: 'unified-table-group', x: 120, y: 1000, height: 260 },
             { className: 'bias-table-group', x: 400, y: 1000, height: 100 }
@@ -59,7 +59,7 @@ describe('alignFooterTables', () => {
 
         expect(block).toEqual({ top: 800, bottom: 1060, height: 260 });
         expect(positionOf(svg, 'unified-table-group')).toEqual({ x: 120, y: 800 });
-        expect(positionOf(svg, 'bias-table-group')).toEqual({ x: 400, y: 960 });
+        expect(positionOf(svg, 'bias-table-group')).toEqual({ x: 400, y: 800 });
     });
 
     it('places a lone legend table at topY — the charts without a bias table still re-anchor', () => {

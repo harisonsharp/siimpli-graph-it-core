@@ -13,6 +13,9 @@ import { calculateAxisIntercepts } from '../utils/axisUtils.js';
  * @param {Image} props.logoImage - Optional logo image object
  * @param {boolean} props.logoReady - Whether logo is ready
  * @param {Function} props.onGraphGenerated - Callback when rendering is complete
+ * @param {boolean} [props.pickValuesOnClick=false] - Lets a click on the plot pick the x
+ *   the legend table reads its values at (see rendering/valuePicker.js). Off by default,
+ *   since a host that adds its own rows to the legend table would lose them on a click.
  */
 export const GraphController = forwardRef(({
     csvData,
@@ -22,6 +25,7 @@ export const GraphController = forwardRef(({
     logoImage,
     logoReady = true,
     onGraphGenerated,
+    pickValuesOnClick = false,
     className = "",
     style = {}
 }, ref) => {
@@ -39,7 +43,8 @@ export const GraphController = forwardRef(({
         logoReady,
         getAxisIntercepts: (x, y, c) => calculateAxisIntercepts(x, y, c || graphConfig, globalSettings),
         colorSchemes: {},
-        onXValueSelect: () => { }
+        onXValueSelect: () => { },
+        pickValuesOnClick
     });
 
     useImperativeHandle(ref, () => ({

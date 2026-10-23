@@ -11,6 +11,10 @@ import {
     validateDerivedFormula,
     formatFormulaReference,
     mapFormulaReferences,
+    expandSeriesReferences,
+    isDerivedReference,
+    TREND_METHODS,
+    buildTrendFormulas,
 } from './derivedSeries.js';
 import { performCurveFitting } from './curveFittingUtils.js';
 import { renderGraph } from '../core/renderGraph.js';
@@ -61,9 +65,138 @@ describe('parseDerivedFormula', () => {
         ['ma(cost, 0)', 'The window for ma() must be a whole number of 1 or more.'],
         ['[cost', 'Missing "]" for the reference that starts at position 1.'],
         ['cost $ 2', 'Unexpected "$" at position 6.'],
-        ['cumsum([Derived 2::__derived__])', 'A derived series cannot use another derived series.'],
+        ['# + 1', '"#" at position 1 must be followed by a series number, as in #2.'],
+        ['"Copper', 'Missing closing quote for the series name that starts at position 1.'],
+        ['cost + ""', 'Empty series name "" at position 8.'],
+        ['cost #2', 'Unexpected #2 at position 6.'],
     ])('rejects %j', (formula, message) => {
         expect(() => parseDerivedFormula(formula)).toThrow(message);
+    });
+
+    it('counts #N and "Name" as series', () => {
+        expect(() => parseDerivedFormula('#1 * 2')).not.toThrow();
+        expect(() => parseDerivedFormula('"Copper price" / 2')).not.toThrow();
+    });
+});
+
+describe('series references', () => {
+    const series = [
+        { yAxis: 'cost::a.csv', titleName: 'Total cost' },
+        { yAxis: 'tonnes::a.csv' },
+        { yAxis: 'Derived 1::__derived__', derived: { formula: '#1 / #2' } },
+    ];
+
+    it('resolves #N by position and "Name" by titleName, ignoring case', () => {
+        const refs = getFormulaReferences('#2 + "total COST"', { series });
+        expect(refs.map(r => [r.columnName, r.fileName])).toEqual([['tonnes', 'a.csv'], ['cost', 'a.csv']]);
+    });
+
+    it('leaves series references out when no series list is given', () => {
+        expect(getFormulaReferences('#2 + [cost]')).toEqual([{ columnName: 'cost', fileName: '', text: 'cost' }]);
+    });
+
+    it.each([
+        ['#9', 'There is no series #9.'],
+        ['"Grade"', 'No series is named "Grade".'],
+    ])('reports %j', (formula, message) => {
+        expect(validateDerivedFormula(formula, null, { series })).toBe(message);
+    });
+
+    it('reports a name used by two series', () => {
+        const twice = [...series, { yAxis: 'price::b.csv', titleName: 'total cost' }];
+        expect(validateDerivedFormula('"Total cost"', null, { series: twice }))
+            .toBe('More than one series is named "Total cost". Use a series number instead, as in #1.');
+    });
+
+    it('reports a series with no column picked', () => {
+        expect(validateDerivedFormula('#1', null, { series: [{ yAxis: '' }] })).toBe('Series #1 has no column picked yet.');
+    });
+
+    it('evaluates #N and "Name" like the columns they point at', () => {
+        const config = { xAxis: 'year::a.csv', series };
+        const { data, errors } = applyDerivedSeries(yearly, config);
+        expect(errors).toEqual([]);
+        expect(data.filter(r => r._sourceFile === DERIVED_SOURCE).map(r => r['Derived 1'])).toEqual([5, 5, 6, 5]);
+    });
+
+    it('expandSeriesReferences writes #N and "Name" out as columns and keeps the rest', () => {
+        expect(expandSeriesReferences('ma(#2, 3) / "total cost" + [cost] + #3', series))
+            .toBe('ma([tonnes::a.csv], 3) / [cost::a.csv] + [cost] + [Derived 1::__derived__]');
+        expect(() => expandSeriesReferences('#9', series)).toThrow('There is no series #9.');
+    });
+
+    it('isDerivedReference spots both forms of a derived series reference', () => {
+        expect(isDerivedReference({ columnName: 'Derived 1', fileName: '__derived__' }, series)).toBe(true);
+        expect(isDerivedReference({ columnName: 'Derived 1', fileName: '' }, series)).toBe(true);
+        expect(isDerivedReference({ columnName: 'cost', fileName: '' }, series)).toBe(false);
+    });
+
+    it('keeps #N and "Name" when column references are remapped', () => {
+        expect(mapFormulaReferences('#1 + "Total cost" + cost', r => `${r.columnName}__data1`))
+            .toBe('#1 + "Total cost" + [cost__data1]');
+    });
+});
+
+describe('derived series that use other derived series', () => {
+    const chain = (formulas) => ({
+        xAxis: 'year::a.csv',
+        series: formulas.map((formula, i) => ({ yAxis: `Derived ${i + 1}::__derived__`, derived: { formula } })),
+    });
+    const valuesOf = (data, key) => data.filter(r => r[key] !== undefined).map(r => r[key]);
+
+    it('works out a chain in dependency order, whatever the series order', () => {
+        // Derived 1 reads Derived 2, which is listed after it.
+        const { data, errors } = applyDerivedSeries(yearly, chain(['diff(#2)', 'cumsum(cost)']));
+        expect(errors).toEqual([]);
+        expect(valuesOf(data, 'Derived 2')).toEqual([10, 30, 60, 100]);
+        expect(valuesOf(data, 'Derived 1')).toEqual([20, 30, 40]);
+    });
+
+    it('accepts the bracketed and unqualified forms', () => {
+        for (const ref of ['[Derived 1::__derived__]', '[Derived 1]']) {
+            const { data, errors } = applyDerivedSeries(yearly, chain(['cost * 2', `${ref} + 1`]));
+            expect(errors, ref).toEqual([]);
+            expect(valuesOf(data, 'Derived 2'), ref).toEqual([21, 41, 61, 81]);
+        }
+    });
+
+    it('keeps diff and ma working when another derived series has points at the same x', () => {
+        const { data, errors } = applyDerivedSeries(yearly, chain(['cost', 'tonnes', 'diff(#1)']));
+        expect(errors).toEqual([]);
+        expect(valuesOf(data, 'Derived 3')).toEqual([10, 10, 10]);
+    });
+
+    it('matches a derived series with a file column by x', () => {
+        const { data, errors } = applyDerivedSeries(yearly, chain(['cumsum(cost)', '#1 / [tonnes::a.csv]']));
+        expect(errors).toEqual([]);
+        expect(valuesOf(data, 'Derived 2')).toEqual([5, 7.5, 12, 12.5]);
+    });
+
+    it('reports a series that uses itself', () => {
+        const { errors } = applyDerivedSeries(yearly, chain(['#1 + 1']));
+        expect(errors).toEqual([{ seriesIndex: 0, key: 'Derived 1', message: 'A derived series cannot use itself.' }]);
+    });
+
+    it('reports a cycle and still computes the series outside it', () => {
+        const { data, errors } = applyDerivedSeries(yearly, chain(['#2', '#1', 'cost']));
+        expect(errors).toEqual([
+            { seriesIndex: 0, key: 'Derived 1', message: 'It uses Derived 2, which has an error.' },
+            { seriesIndex: 1, key: 'Derived 2', message: 'Derived 2 and Derived 1 use each other, so neither can be worked out.' },
+        ]);
+        expect(valuesOf(data, 'Derived 3')).toEqual([10, 20, 30, 40]);
+    });
+
+    it('passes an error down the chain', () => {
+        const { errors } = applyDerivedSeries(yearly, chain(['grade', '#1 * 2']));
+        expect(errors[1]).toEqual({ seriesIndex: 1, key: 'Derived 2', message: 'It uses Derived 1, which has an error.' });
+    });
+
+    it('validateDerivedFormula accepts another derived series and rejects an unknown one', () => {
+        const { series } = chain(['cost', '#1 * 2']);
+        expect(validateDerivedFormula('[Derived 1::__derived__] * 2', [], { series, seriesIndex: 1 })).toBeNull();
+        expect(validateDerivedFormula('#2', [], { series, seriesIndex: 1 })).toBe('A derived series cannot use itself.');
+        expect(validateDerivedFormula('[Derived 7::__derived__]', [], { series, seriesIndex: 1 }))
+            .toBe('There is no derived series named "Derived 7".');
     });
 });
 
@@ -379,5 +512,122 @@ describe('integration', () => {
         expect(result.success).toBe(true);
         expect(result.derivedErrors).toEqual([{ seriesIndex: 1, key: 'Derived 1', message: 'The formula ends too early.' }]);
         expect(svg.querySelectorAll('path.dot').length).toBe(4);
+    });
+});
+
+describe('averages and spread', () => {
+    const prices = tag('a.csv', [
+        { year: 2020, price: 1 },
+        { year: 2021, price: 2 },
+        { year: 2022, price: 3 },
+        { year: 2023, price: 4 },
+        { year: 2024, price: 10 },
+    ]);
+
+    it('std and median work over the whole series', () => {
+        expect(points(prices, 'std([price])')[0][1]).toBeCloseTo(Math.sqrt(12.5), 10);
+        expect(points(prices, 'median([price])')[0][1]).toBe(3);
+    });
+
+    it('centred and nearest-neighbour functions use x', () => {
+        expect(points(prices, 'cmax([price], 2)').map(p => p[1])).toEqual([2, 3, 4, 10, 10]);
+        expect(points(prices, 'knnmean([price], 2)').map(p => p[1])).toEqual([1.5, 1.5, 2.5, 3.5, 7]);
+    });
+
+    it('rolling functions count the last n points, partial at the start', () => {
+        expect(points(prices, 'rmean([price], 3)').map(p => p[1])).toEqual([1, 1.5, 2, 3, 17 / 3]);
+        expect(points(prices, 'rmax([price], 2)').map(p => p[1])).toEqual([1, 2, 3, 4, 10]);
+    });
+
+    it('rolling functions skip gaps and count only points with a value', () => {
+        const gappy = tag('a.csv', [
+            { year: 2020, price: 2 },
+            { year: 2021, price: '' },
+            { year: 2022, price: 4 },
+            { year: 2023, price: 6 },
+        ]);
+        expect(points(gappy, 'rmean([price], 2)')).toEqual([[2020, 2], [2022, 3], [2023, 5]]);
+        expect(points(gappy, 'rmin([price], 2)')).toEqual([[2020, 2], [2022, 2], [2023, 4]]);
+    });
+
+    it('rolling functions work on category x', () => {
+        const named = tag('a.csv', [{ year: 'a', price: 1 }, { year: 'b', price: 3 }]);
+        expect(points(named, 'rmean([price], 2)')).toEqual([['a', 1], ['b', 2]]);
+    });
+
+    it('ema and cummean skip gaps', () => {
+        const gappy = tag('a.csv', [
+            { year: 2020, price: 2 },
+            { year: 2021, price: '' },
+            { year: 2022, price: 4 },
+        ]);
+        expect(points(gappy, 'cummean([price])')).toEqual([[2020, 2], [2022, 3]]);
+        // n = 3 gives a weight of 0.5.
+        expect(points(gappy, 'ema([price], 3)')).toEqual([[2020, 2], [2022, 3]]);
+    });
+
+    it('checks window arguments', () => {
+        expect(validateDerivedFormula('cmean([price], 0)')).toMatch(/more than 0/);
+        expect(validateDerivedFormula('rmean([price], 2.5)')).toMatch(/whole number/);
+        expect(validateDerivedFormula('rmean([price], 0)')).toMatch(/whole number/);
+        expect(validateDerivedFormula('knnmean([price], 2.5)')).toMatch(/share between 0 and 1/);
+        expect(validateDerivedFormula('lowess([price], 0.3)')).toBeNull();
+        expect(validateDerivedFormula('ema([price], 1.5)')).toMatch(/whole number/);
+    });
+
+    it('reports x values that cannot be windowed', () => {
+        const named = tag('a.csv', [{ year: 'a', price: 1 }, { year: 'b', price: 2 }]);
+        const { errors } = applyDerivedSeries(named, derivedConfig('cmean([price], 1)'));
+        expect(errors[0].message).toMatch(/cmean\(\): .*numbers or dates/);
+    });
+});
+
+describe('buildTrendFormulas', () => {
+    it('writes a trend and its standard deviation lines', () => {
+        const { trend, bands } = buildTrendFormulas('centred', '#1', 3, [1, -2]);
+        expect(trend).toBe('cmean(#1, 3)');
+        expect(bands.map(b => b.formula)).toEqual(['cmean(#1, 3) + cstd(#1, 3)', 'cmean(#1, 3) - 2 * cstd(#1, 3)']);
+    });
+
+    it('gives valid formulas for every method', () => {
+        TREND_METHODS.forEach((method) => {
+            const { trend, bands } = buildTrendFormulas(method.id, '[price]', method.param?.defaultValue);
+            expect(validateDerivedFormula(trend), method.id).toBeNull();
+            bands.forEach(b => expect(validateDerivedFormula(b.formula), method.id).toBeNull());
+        });
+        expect(buildTrendFormulas('whole', '#2').trend).toBe('mean(#2)');
+    });
+});
+
+describe('untagged rows', () => {
+    it('a second derived series still finds an untagged file after the first one adds rows', () => {
+        const rows = [{ year: 2020, cost: 10 }, { year: 2021, cost: 20 }];
+        const config = {
+            xAxis: 'year::a.csv',
+            series: [
+                { yAxis: 'Derived 1::__derived__', derived: { formula: 'cumsum([cost::a.csv])' } },
+                { yAxis: 'Derived 2::__derived__', derived: { formula: '[cost::a.csv] * 2' } },
+            ],
+        };
+        const { data, errors } = applyDerivedSeries(rows, config);
+        expect(errors).toEqual([]);
+        expect(data.filter(r => 'Derived 2' in r).map(r => r['Derived 2'])).toEqual([20, 40]);
+    });
+});
+
+describe('shared results', () => {
+    it('gives the same values when formulas share calls as when each runs alone', () => {
+        const rows = tag('a.csv', Array.from({ length: 40 }, (_, i) => ({ year: 2000 + i, price: 10 + Math.sin(i / 3) * 4 + (i % 5) })));
+        const formulas = ['lowess([price], 0.5)', 'lowess([price], 0.5) + lowessstd([price], 0.5)', 'lowess([price], 0.5) - 2 * lowessstd([price], 0.5)'];
+        const together = applyDerivedSeries(rows, {
+            xAxis: 'year::a.csv',
+            series: formulas.map((formula, i) => ({ yAxis: `Derived ${i + 1}::__derived__`, derived: { formula } })),
+        }).data;
+        formulas.forEach((formula, i) => {
+            const key = `Derived ${i + 1}`;
+            const shared = together.filter(r => key in r).map(r => r[key]);
+            const alone = points(rows, formula).map(p => p[1]);
+            expect(shared).toEqual(alone);
+        });
     });
 });

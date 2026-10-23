@@ -254,12 +254,9 @@ const drawXAxis = (g, xScale, xAxisY, xAxisLabelOffset, xAxisLabel, graphType, d
         const isTimeScale = domain.length > 0 && domain[0] instanceof Date;
 
         if (isTimeScale) {
-            const [domainMin, domainMax] = domain;
-            const rangeYears = (domainMax - domainMin) / (1000 * 60 * 60 * 24 * 365);
-            if (rangeYears <= 10) {
-                axisGenerator.tickFormat(d3.timeFormat("%Y/%m"));
-            }
-            // For ranges > 10 years let D3 auto-format (shows just the year, horizontal)
+            // Without a format, d3's default shows years on long ranges.
+            const format = dateTickFormat(config, domain);
+            if (format) axisGenerator.tickFormat(format);
         } else {
             // Numeric X-Axis (Scatter, Line, etc.)
             if (config?.logX) {
@@ -313,36 +310,59 @@ const drawXAxis = (g, xScale, xAxisY, xAxisLabelOffset, xAxisLabel, graphType, d
     xAxis.select('.domain')
         .style('stroke', color);
 
-    // Rotation Logic
-    // User request: "Bar charts with x-axis ticks texts that are nominal, corresponding with a date, or other non-numeric value should be rotated 45 degrees"
-    // We apply this to all band scales (nominal/categorical) and potentially time scales if we had them explicitly (but usually handled by d3.scaleTime).
-    // Here we focus on band scales or if explicit rotation is needed.
-    if (xScale.bandwidth) {
-        // Rotate 45 degrees (actually -45 to read upwards-right)
-        xAxis.selectAll('text')
-            .style('text-anchor', 'end')
-            .attr('dx', '-.8em')
-            .attr('dy', '.15em')
-            .attr('transform', 'rotate(-45)');
-    } else {
-        // Rotate time scale labels only for short ranges where %Y/%m labels are used
-        const domain = xScale.domain();
-        const isTimeScale = domain.length > 0 && domain.some(d => d instanceof Date);
-
-        if (isTimeScale) {
-            const rangeYears = (domain[domain.length - 1] - domain[0]) / (1000 * 60 * 60 * 24 * 365);
-            if (rangeYears <= 10) {
-                xAxis.selectAll('text')
-                    .style('text-anchor', 'end')
-                    .attr('dx', '-.8em')
-                    .attr('dy', '.15em')
-                    .attr('transform', 'rotate(-45)');
-            }
-        }
-    }
+    rotateXTickLabels(xAxis, xScale, config);
 
     return xAxis;
 };
+
+const MS_PER_YEAR = 1000 * 60 * 60 * 24 * 365;
+
+/** d3 time formats for graphConfig.xDateFormat. */
+export const X_DATE_FORMATS = { year: '%Y', month: '%Y/%m', day: '%Y/%m/%d' };
+
+/**
+ * Tick format for a date x-axis. graphConfig.xDateFormat ('year', 'month' or 'day')
+ * sets it. Without it, a range of 10 years or less shows year/month, and a longer
+ * range keeps d3's default, which shows years.
+ * @param {Object} config - graphConfig
+ * @param {Array<Date>} domain - the x scale's domain
+ * @returns {Function|null} a formatter, or null for d3's default
+ */
+export function dateTickFormat(config, domain) {
+    const named = X_DATE_FORMATS[config?.xDateFormat];
+    if (named) return d3.timeFormat(named);
+    if (domain?.length > 1 && (domain[domain.length - 1] - domain[0]) / MS_PER_YEAR <= 10) {
+        return d3.timeFormat(X_DATE_FORMATS.month);
+    }
+    return null;
+}
+
+/**
+ * Turns the x tick labels to read up to the right. graphConfig.xTickRotation sets
+ * the angle in degrees, and 0 keeps them level. Without it, labels on a category
+ * axis or on a date axis of 10 years or less turn 45 degrees, since those labels
+ * are long, and the rest stay level.
+ * Call it again after redrawing the axis, since new ticks come in level.
+ * @param {d3.Selection} xAxis - the x-axis group
+ * @param {Object} xScale
+ * @param {Object} config - graphConfig
+ */
+export function rotateXTickLabels(xAxis, xScale, config) {
+    const set = config?.xTickRotation;
+    let degrees = Number(set);
+    if (set === undefined || set === null || set === '' || !Number.isFinite(degrees)) {
+        const domain = xScale.domain();
+        const shortDates = domain.length > 0 && domain.some(d => d instanceof Date)
+            && (domain[domain.length - 1] - domain[0]) / MS_PER_YEAR <= 10;
+        degrees = xScale.bandwidth || shortDates ? 45 : 0;
+    }
+    if (degrees === 0) return;
+    xAxis.selectAll('.tick text')
+        .style('text-anchor', 'end')
+        .attr('dx', '-.8em')
+        .attr('dy', '.15em')
+        .attr('transform', `rotate(${-degrees})`);
+}
 
 const drawPrimaryYAxis = (g, xScale, primaryYScale, yAxisX, primaryColor, config = {}) => {
     const axisGenerator = d3.axisLeft(primaryYScale)

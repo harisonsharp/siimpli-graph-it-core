@@ -9,6 +9,7 @@
 import { useCallback } from 'react';
 import { renderGraph } from '../core/renderGraph.js';
 import { CanvasSizer, DataTableRenderer, debugWarn } from '../index.js';
+import { attachValuePicker } from '../rendering/valuePicker.js';
 
 export function useGraphRenderer({
     csvData,
@@ -20,7 +21,8 @@ export function useGraphRenderer({
     getAxisIntercepts,
     colorSchemes,
     isBatchMode = false,
-    onXValueSelect
+    onXValueSelect,
+    pickValuesOnClick = false
 }) {
     const generateGraph = useCallback((svgRef, onSuccess, onError, overrides = {}) => {
         try {
@@ -61,6 +63,10 @@ export function useGraphRenderer({
             }
 
             const { margin } = result;
+
+            if (pickValuesOnClick && !targetIsBatchMode) {
+                attachValuePicker(result, targetGlobalSettings);
+            }
 
             let finalDimensions = null;
             try {
@@ -107,7 +113,8 @@ export function useGraphRenderer({
         getAxisIntercepts,
         colorSchemes,
         isBatchMode,
-        onXValueSelect
+        onXValueSelect,
+        pickValuesOnClick
     ]);
 
     return { generateGraph };

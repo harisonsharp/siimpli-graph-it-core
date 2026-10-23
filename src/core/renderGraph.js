@@ -21,6 +21,7 @@ import { BiasTableRenderer } from '../rendering/BiasTableRenderer.js';
 import { alignFooterTables } from '../rendering/tableLayout.js';
 import { BaseChartRenderer } from '../rendering/ChartRenderers/BaseChartRenderer.js';
 import { applyDerivedSeries } from '../utils/derivedSeries.js';
+import { resolveBiasTableData } from '../utils/biasTable.js';
 
 /**
  * Parses column identifiers from configuration.
@@ -829,19 +830,18 @@ export function renderGraph({
                 svg, validData, columnInfo, scales, targetGraphConfig, globalSettings, footerDimensions
             );
 
-            if (globalSettings.showBiasTable && globalSettings.biasTableData) {
+            const biasTableData = globalSettings.showBiasTable
+                ? resolveBiasTableData(csvData, graphConfig, globalSettings)
+                : null;
+            if (biasTableData?.length) {
                 BiasTableRenderer.drawBiasTable(
-                    svg, globalSettings.biasTableData, footerDimensions, globalSettings,
+                    svg, biasTableData, footerDimensions, globalSettings,
                     unifiedTableWidth > 0 ? unifiedTableWidth : 365
                 );
 
-                // Both tables are drawn from the same top edge but hold different amounts
-                // of content, so they finish on different lines — a ragged bottom that
-                // reads as a misalignment rather than as two panels of one footer. Sit
-                // them on a shared baseline instead: the tallest keeps the top it was
-                // drawn at (so nothing moves up into the axis title) and the shorter one
-                // drops to meet it, which leaves the pair's overall extent unchanged for
-                // the canvas sizing that runs after this.
+                // The two renderers place their tables separately, so put both on one
+                // top edge: the higher of the two tops, so nothing moves up into the
+                // axis title. The shorter table then ends higher than the taller one.
                 alignFooterTables(typeof svg.node === 'function' ? svg.node() : svg);
             }
         } else {

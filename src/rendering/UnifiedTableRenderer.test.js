@@ -223,8 +223,30 @@ describe('Series-column collapse', () => {
     });
 
     it('collapsing makes the table narrower, which is what the bias table is placed against', () => {
-        expect(draw(graphConfig()).width)
-            .toBeLessThan(draw(graphConfig({ keepSeriesColumn: true })).width);
+        // Median mode keeps the short "Legend" title, so the columns alone set the width.
+        expect(draw(graphConfig({ unifiedValueMode: 'median' })).width)
+            .toBeLessThan(draw(graphConfig({ unifiedValueMode: 'median', keepSeriesColumn: true })).width);
+    });
+
+    it('titles a value-mode table with the point its values are read at', () => {
+        expect(draw(graphConfig()).texts).toContain('Legend, Values at Most Recent Point');
+        expect(draw(graphConfig(), 2).texts).toContain('Legend, Values at Most Recent Point');
+        const group = fakeGroup();
+        UnifiedTableRenderer._drawTableContent(
+            group, prepare(graphConfig(), 2), graphConfig().series, null, graphConfig(), 2);
+        expect(group.texts).toContain('Legend, Values at Selected Point');
+    });
+
+    it('keeps the bare Legend title where the values are not read at one point', () => {
+        expect(draw(graphConfig({ unifiedValueMode: 'median' })).texts).toContain('Legend');
+        expect(UnifiedTableRenderer.legendTitle({ unifiedValueMode: 'fitAtX' }, 2)).toBe('Legend');
+        expect(UnifiedTableRenderer.legendTitle({ ignoreUnifiedValues: true }, null)).toBe('Legend');
+    });
+
+    it('widens a narrow table so the long title clears the date pair', () => {
+        const { width } = draw(graphConfig());
+        const title = 'Legend, Values at Most Recent Point';
+        expect(width).toBeGreaterThan(10 + title.length * UnifiedTableRenderer.TITLE_CHAR_PX + 12);
     });
 
     it('leaves a genuinely multi-series chart alone — two names are not repetition', () => {

@@ -2,11 +2,10 @@
  * @fileoverview Shared vertical placement for the chart's footer tables — the unified
  * legend/value table and the bias table that sits beside it.
  *
- * Each renderer draws its own table at its own top-left corner and sizes its background
- * rect to whatever its content came out at, so two tables of different heights end up
- * with a ragged bottom edge. Reading them as a pair is easier when they share one
- * baseline, which is what this does: the tallest table keeps the top, and the shorter
- * one is dropped so both bottom edges line up.
+ * Each renderer draws its own table at its own top-left corner, and the two renderers
+ * work out that corner separately, so the pair can start on different lines. This puts
+ * both on one top edge. The shorter table ends higher, which leaves a ragged bottom
+ * edge; that is intended, as the tops are what the eye reads the pair along.
  *
  * Positions are read from and written to the group `transform` and the background rect's
  * `height` ATTRIBUTE — never `getBBox()`, which does not exist under jsdom (the headless
@@ -47,22 +46,21 @@ function readTable(node) {
 }
 
 /**
- * Aligns the footer tables on a common bottom edge, optionally re-anchoring the pair.
+ * Aligns the footer tables on a common top edge, optionally re-anchoring the pair.
  *
- * The tallest table defines the block: its top sits at `topY` (or, without one, stays
- * where it was drawn), and every other table is pushed down so all of them finish on the
- * same line. Horizontal position is left untouched — each renderer owns its own column.
+ * Every table's top goes to `topY`, or, without one, to the highest top among them, so
+ * no table moves up into content above the block. Horizontal position is left
+ * untouched: each renderer owns its own column.
  *
  * @param {Element|null} svgNode - The root `<svg>` DOM node.
  * @param {Object} [options]
- * @param {number|null} [options.topY] - Absolute SVG y for the top of the TALLEST table.
+ * @param {number|null} [options.topY] - Absolute SVG y for the top of the block.
  *   Callers that want the block to clear a specific element (e.g. the x-axis title) pass
- *   it here. Omitted, the current top of the tallest table is kept, so the block only
- *   closes up its own ragged bottom and never moves into content above it.
+ *   it here.
  * @param {Array<string>} [options.selectors] - Group selectors to place.
  * @returns {{top: number, bottom: number, height: number}|null} The block's extent in SVG
- *   coordinates, or `null` when there is nothing to place. Callers use `bottom` to check
- *   the canvas still covers the tables.
+ *   coordinates, or `null` when there is nothing to place. `bottom` is the bottom of the
+ *   TALLEST table; callers use it to check the canvas still covers the tables.
  */
 export function alignFooterTables(svgNode, { topY = null, selectors = FOOTER_TABLE_SELECTORS } = {}) {
     if (!svgNode || typeof svgNode.querySelector !== 'function') return null;
@@ -77,11 +75,10 @@ export function alignFooterTables(svgNode, { topY = null, selectors = FOOTER_TAB
 
     const tallest = Math.max(...tables.map(table => table.height));
     const top = Number.isFinite(topY) ? topY : Math.min(...tables.map(table => table.y));
-    const bottom = top + tallest;
 
     for (const table of tables) {
-        table.node.setAttribute('transform', `translate(${table.x}, ${bottom - table.height})`);
+        table.node.setAttribute('transform', `translate(${table.x}, ${top})`);
     }
 
-    return { top, bottom, height: tallest };
+    return { top, bottom: top + tallest, height: tallest };
 }
