@@ -395,7 +395,36 @@ const drawPrimaryYAxis = (g, xScale, primaryYScale, yAxisX, primaryColor, config
     return primaryYAxis;
 };
 
-const drawSecondaryYAxis = (g, secondaryYScale, width, secondaryColor, config = {}) => {
+// The primary y ticks: the static scale's when one is set, else d3's automatic ones.
+// The grid and the dual-units secondary axis both follow these.
+const primaryYTickValues = (primaryYScale, config) => {
+    const staticYScale = getStaticScale(config, 'y');
+    return staticYScale
+        ? buildTickValues(staticYScale.min, staticYScale.max, staticYScale.step)
+        : primaryYScale.ticks ? primaryYScale.ticks() : primaryYScale.domain();
+};
+
+/**
+ * Secondary y ticks for dual units, which show one quantity in two units: the
+ * ticks sit on the primary ticks (and so on the grid), labelled in the converted
+ * unit. The converted values are rarely round (5,000 US$/t is 2.268 US$/lb), so
+ * they are rounded to three significant figures of the tick spacing. The zoom
+ * hooks call this too, with the rescaled scales.
+ * @param {d3.ScaleLinear} primaryYScale
+ * @param {d3.ScaleLinear} secondaryYScale
+ * @param {number[]} primaryTicks - the primary axis's tick values
+ * @returns {{values: number[], format: function(number): string}}
+ */
+export const alignedSecondaryTicks = (primaryYScale, secondaryYScale, primaryTicks) => {
+    const values = primaryTicks.map(t => secondaryYScale.invert(primaryYScale(t)));
+    const spacing = values.length > 1 ? Math.abs(values[1] - values[0]) : 0;
+    const decimals = spacing > 0 ? Math.max(0, 2 - Math.floor(Math.log10(spacing))) : 2;
+    // Fixed decimals so a column of labels reads 4.54, 6.80, 9.07, not 6.8.
+    const fixed = d3.format(`,.${decimals}f`);
+    return { values, format: d => (Math.abs(d) < 10 ** -(decimals + 1) ? '0' : fixed(d)) };
+};
+
+const drawSecondaryYAxis = (g, secondaryYScale, width, secondaryColor, config = {}, primaryYScale = null) => {
     const axisGenerator = d3.axisRight(secondaryYScale)
         .tickSizeOuter(0)
         .tickFormat(d => formatNumber(d, 8)); // 8 digits threshold for Y-axis
@@ -403,6 +432,10 @@ const drawSecondaryYAxis = (g, secondaryYScale, width, secondaryColor, config = 
     const staticY2Scale = getStaticScale(config, 'y2');
     if (staticY2Scale) {
         axisGenerator.tickValues(buildTickValues(staticY2Scale.min, staticY2Scale.max, staticY2Scale.step));
+    } else if (config.dualUnits && !config.logY && primaryYScale?.ticks) {
+        const { values, format } = alignedSecondaryTicks(
+            primaryYScale, secondaryYScale, primaryYTickValues(primaryYScale, config));
+        axisGenerator.tickValues(values).tickFormat(format);
     }
 
     const secondaryYAxis = g.append('g')
@@ -584,7 +617,7 @@ export const drawAxes = (
     drawPrimaryYAxis(g, xScale, primaryYScale, yAxisX, primaryColor, config);
     debugLog('[drawAxes] Secondary Y Scale and isDualAxis: ', secondaryYScale, isDualAxis);
     if (isDualAxis && secondaryYScale) {
-        drawSecondaryYAxis(g, secondaryYScale, width, secondaryColor, config);
+        drawSecondaryYAxis(g, secondaryYScale, width, secondaryColor, config, primaryYScale);
     }
 
     // Axis titles stay on the plot edge: only the axis line and its tick labels move
@@ -645,10 +678,7 @@ export const drawGuideLines = (g, xScale, yScale, width, height, config = {}) =>
 
     // Horizontal guide lines (based on Y-axis ticks). A static scale sets the labelled
     // ticks explicitly, so the grid follows those rather than d3's automatic ones.
-    const staticYScale = getStaticScale(config, 'y');
-    const yTicks = staticYScale
-        ? buildTickValues(staticYScale.min, staticYScale.max, staticYScale.step)
-        : yScale.ticks ? yScale.ticks() : yScale.domain();
+    const yTicks = primaryYTickValues(yScale, config);
     yTicks.forEach(tick => {
         guideGroup.append('line')
             .attr('x1', 0)

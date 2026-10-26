@@ -111,6 +111,56 @@ describe('drawAxes with a static scale and an intercept inside the plot', () => 
     });
 });
 
+describe('dual units secondary axis', () => {
+    // Tin prices in US$/t on the left, US$/lb on the right.
+    const LB_PER_T = 2204.62262184878;
+    const prices = d3.range(20).map(i => ({ year: 2006 + i, price: 6000 + i * 2600 }));
+    const priceAxis = { columnName: 'year' };
+    const priceSeries = [{ graphType: 'line', yAxisInfo: { columnName: 'price' } }];
+    const dualConfig = {
+        graphType: 'line', series: [{ graphType: 'line' }],
+        dualUnits: true, scaleFactor: LB_PER_T, fromUnits: 'USD$/dmt', toUnits: 'USD$/lbs'
+    };
+    const drawDual = config => {
+        const { xScale, yScale } = ScaleFactory.createScalesForGraph(prices, priceAxis, priceSeries, WIDTH, HEIGHT, config);
+        const g = d3.select(document.body).append('svg').append('g');
+        drawAxes(g, xScale, yScale, HEIGHT, WIDTH, margin, 'Year', 'Tin Price', 'line',
+            config, null, priceSeries, null, { showGuideLines: true }, prices, priceAxis);
+        return { g, yScale };
+    };
+    const tickRows = sel => sel.selectAll('.tick').nodes().map(n => translate(d3.select(n))[1]);
+
+    it('puts every secondary tick on a primary tick and a grid line', () => {
+        const { g } = drawDual(dualConfig);
+        const primary = tickRows(g.select('.y-axis-primary'));
+        const secondary = tickRows(g.select('.y-axis-secondary'));
+        const grid = g.selectAll('.guide-lines line').nodes()
+            .filter(n => n.getAttribute('y1') === n.getAttribute('y2'))
+            .map(n => Number(n.getAttribute('y1')));
+        // d3 draws ticks half a pixel off the scale value for crisp lines; the grid does not.
+        const offset = d3.axisRight(d3.scaleLinear()).offset();
+        expect(secondary.length).toBe(primary.length);
+        expect(grid.length).toBe(primary.length);
+        secondary.forEach((y, i) => {
+            expect(y).toBeCloseTo(primary[i], 6);
+            expect(y - offset).toBeCloseTo(grid[i], 6);
+        });
+    });
+
+    it('labels the secondary ticks with the converted values, rounded', () => {
+        const { g } = drawDual(dualConfig);
+        const primary = tickLabels(g.select('.y-axis-primary')).map(s => Number(s.replace(/,/g, '')));
+        const secondary = tickLabels(g.select('.y-axis-secondary')).map(Number);
+        secondary.forEach((v, i) => expect(v).toBeCloseTo(primary[i] / LB_PER_T, 2));
+        expect(tickLabels(g.select('.y-axis-secondary'))).toContain('4.54'); // 10,000 US$/t
+    });
+
+    it('keeps a static secondary scale when one is set', () => {
+        const { g } = drawDual({ ...dualConfig, staticScales: { y2: { enabled: true, min: 0, max: 30, step: 10 } } });
+        expect(tickLabels(g.select('.y-axis-secondary'))).toEqual(['0', '10', '20', '30']);
+    });
+});
+
 describe('drawGuideLines', () => {
     const gridPositions = (g) => {
         const lines = g.selectAll('.guide-lines line').nodes().map(n => d3.select(n));
